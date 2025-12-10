@@ -1,0 +1,36 @@
+# Framework Web
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# CORS y seguridad
+python-multipart>=0.0.6
+
+# Validación de datos (VERSIONES MÁS NUEVAS)
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# Procesamiento de datos
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+
+# Cliente de Databricks
+databricks-sql-connector>=3.0.0
+databricks-sdk>=0.12.0
+
+# IA y Agentes LangChain
+langchain>=0.3.0
+langchain-openai>=0.2.0
+openai>=1.0.0
+
+# Vector Database
+chromadb>=0.5.0
+
+# Utilidades
+python-dotenv>=1.0.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# Testing
+pytest>=7.4.0
+httpx>=0.25.0
