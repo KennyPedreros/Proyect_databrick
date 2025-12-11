@@ -1,146 +1,18 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.config.settings import settings
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import StorageStatus, SuccessResponse
 from app.services.databricks_service import databricks_service
 from typing import Dict, Any
-from app.api.endpoints import ingestion, storage
 import logging
-
-
-# Crear la aplicación FastAPI
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    description="API para gestión inteligente de datos COVID-19",
-    version=settings.VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
-
-# Configurar CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 router = APIRouter(prefix="/api/storage", tags=["Módulo 2: Almacenamiento"])
 
 logger = logging.getLogger(__name__)
 
-# Crear la aplicación FastAPI
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    description="API para gestión inteligente de datos COVID-19",
-    version=settings.VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
-
-# Configurar CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # ============================================
-# EVENTOS DE INICIO Y CIERRE
+# FUNCIONES DEL MÓDULO 2
 # ============================================
 
-@app.on_event("startup")
-async def startup_event():
-    """Se ejecuta al iniciar el servidor"""
-    print(f"🚀 {settings.PROJECT_NAME} v{settings.VERSION}")
-    print(f"📡 API corriendo en http://{settings.API_HOST}:{settings.API_PORT}")
-    print(f"📚 Documentación disponible en http://localhost:{settings.API_PORT}/docs")
-    print(f"💾 Databricks configurado: {settings.DATABRICKS_HOST is not None}")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Se ejecuta al cerrar el servidor"""
-    print("👋 Cerrando servidor...")
-
-# ============================================
-# RUTAS BÁSICAS
-# ============================================
-
-@app.get("/")
-def read_root():
-    """Ruta raíz - Información del sistema"""
-    return {
-        "message": f"¡Bienvenido al {settings.PROJECT_NAME}!",
-        "status": "online",
-        "version": settings.VERSION,
-        "docs": f"http://localhost:{settings.API_PORT}/docs"
-    }
-
-@app.get("/health")
-def health_check():
-    """Health check - Verificar que el servidor está funcionando"""
-    return {
-        "status": "healthy",
-        "service": settings.PROJECT_NAME,
-        "version": settings.VERSION
-    }
-
-@app.get("/api/info")
-def system_info():
-    """Información del sistema"""
-    return {
-        "project": settings.PROJECT_NAME,
-        "version": settings.VERSION,
-        "databricks_configured": settings.DATABRICKS_HOST is not None,
-        "openai_configured": settings.OPENAI_API_KEY is not None,
-        "modules": {
-            "modulo_1": "Ingesta de Datos",
-            "modulo_2": "Almacenamiento Delta Lake",
-            "modulo_3": "Procesamiento y Limpieza",
-            "modulo_4": "Clasificación y Etiquetado",
-            "modulo_5": "Almacenamiento Final y Visualización",
-            "modulo_6": "Monitoreo y Auditoría",
-            "extra": "Consultas RAG"
-        },
-        "status": {
-            "modulo_1": "✅ Completo",
-            "modulo_2": "✅ Completo", 
-            "modulo_3": "🔄 Pendiente",
-            "modulo_4": "🔄 Pendiente",
-            "modulo_5": "🔄 Pendiente",
-            "modulo_6": "🔄 Pendiente",
-            "rag": "🔄 Pendiente"
-        }
-    }
-
-# ============================================
-# REGISTRAR ROUTERS
-# ============================================
-
-# Módulo 1: Ingesta de Datos
-app.include_router(ingestion.router)
-
-# Módulo 2: Almacenamiento
-app.include_router(storage.router)
-
-# Si quieres ver todos los endpoints disponibles
-@app.get("/api/routes")
-def list_routes():
-    """Listar todas las rutas disponibles"""
-    routes = []
-    for route in app.routes:
-        if hasattr(route, "methods"):
-            routes.append({
-                "path": route.path,
-                "methods": list(route.methods),
-                "name": route.name,
-                "tags": getattr(route, "tags", [])
-            })
-    return {"total_routes": len(routes), "routes": routes}
 def initialize_storage():
     """Inicializa el sistema de almacenamiento en Databricks"""
     try:
