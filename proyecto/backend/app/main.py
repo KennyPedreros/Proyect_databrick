@@ -4,10 +4,8 @@ from app.config.settings import settings
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import StorageStatus, SuccessResponse
 from app.services.databricks_service import databricks_service
-from app.api.endpoints import ingestion, storage, classification
 from typing import Dict, Any
-from app.api.endpoints import ingestion, storage
-from app.api.endpoints import ingestion, storage, classification, dashboard
+from app.api.endpoints import ingestion, storage, cleaning, classification, dashboard
 import logging
 
 
@@ -111,9 +109,9 @@ def system_info():
         "status": {
             "modulo_1": "✅ Completo",
             "modulo_2": "✅ Completo", 
-            "modulo_3": "🔄 Pendiente",
-            "modulo_4": "🔄 Pendiente",
-            "modulo_5": "🔄 Pendiente",
+            "modulo_3": "✅ Completo",
+            "modulo_4": "✅ Completo",
+            "modulo_5": "✅ Completo",
             "modulo_6": "🔄 Pendiente",
             "rag": "🔄 Pendiente"
         }
@@ -128,6 +126,9 @@ app.include_router(ingestion.router)
 
 # Módulo 2: Almacenamiento
 app.include_router(storage.router)
+
+# Módulo 3: Limpieza de Datos
+app.include_router(cleaning.router)
 
 #Módulo 4
 app.include_router(classification.router)
