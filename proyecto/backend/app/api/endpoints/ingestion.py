@@ -4,6 +4,8 @@ from typing import List
 import uuid
 from datetime import datetime
 import os
+import pandas as pd
+import io
 
 router = APIRouter(prefix="/api/ingest", tags=["Módulo 1: Ingesta de Datos"])
 
@@ -27,8 +29,8 @@ def validate_schema(filename: str, size: int) -> bool:
     if ext not in allowed_extensions:
         return False
     
-    # Validar tamaño (max 50MB)
-    max_size = 50 * 1024 * 1024  # 50 MB
+    # Validar tamaño (max 500MB - aumentado de 50MB)
+    max_size = 500 * 1024 * 1024  # 500 MB
     if size > max_size:
         return False
     
@@ -37,6 +39,25 @@ def validate_schema(filename: str, size: int) -> bool:
 def log_ingestion_status(ingestion_id: str, status: str):
     """Registra el estado de la ingesta en logs"""
     print(f"[INGESTION] {ingestion_id} - Status: {status} - {datetime.now()}")
+
+def count_records_from_file(file_content: bytes, filename: str) -> int:
+    """Cuenta los registros reales del archivo"""
+    try:
+        ext = os.path.splitext(filename)[1].lower()
+        
+        if ext == '.csv':
+            df = pd.read_csv(io.BytesIO(file_content))
+        elif ext in ['.xlsx', '.xls']:
+            df = pd.read_excel(io.BytesIO(file_content))
+        elif ext == '.json':
+            df = pd.read_json(io.BytesIO(file_content))
+        else:
+            return 0
+        
+        return len(df)
+    except Exception as e:
+        print(f"Error counting records: {str(e)}")
+        return 0
 
 # ============================================
 # ENDPOINTS
@@ -52,31 +73,40 @@ async def upload_covid_data(file: UploadFile = File(...)):
     - load_data()
     - validate_schema()
     - log_ingestion_status()
+    
+    Límite: 500MB por archivo
+    Formatos: CSV, Excel (.xlsx, .xls), JSON
     """
     try:
         # Crear ID único
         ingestion_id = crear_id_ingesta()
         
-        # Validar archivo
+        # Leer contenido del archivo
         contents = await file.read()
         file_size = len(contents)
         
+        # Validar archivo
         if not validate_schema(file.filename, file_size):
             raise HTTPException(
                 status_code=400,
-                detail="Archivo inválido. Solo se permiten CSV, Excel o JSON (max 50MB)"
+                detail=f"Archivo inválido. Solo se permiten CSV, Excel o JSON (max 500MB). Tamaño actual: {file_size / 1024 / 1024:.2f}MB"
             )
         
-        # Simular conteo de registros (en producción, esto leería el archivo)
-        # Por ahora, estimamos basados en el tamaño
-        estimated_records = file_size // 100  # Estimación simple
+        # Contar registros reales
+        records_count = count_records_from_file(contents, file.filename)
+        
+        if records_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No se pudieron leer registros del archivo. Verifica el formato."
+            )
         
         # Guardar información en la "base de datos"
         file_info = {
             "ingestion_id": ingestion_id,
             "filename": file.filename,
             "size_bytes": file_size,
-            "records_count": estimated_records,
+            "records_count": records_count,
             "uploaded_at": datetime.now()
         }
         uploaded_files_db.append(file_info)
@@ -87,9 +117,9 @@ async def upload_covid_data(file: UploadFile = File(...)):
         return IngestionResponse(
             ingestion_id=ingestion_id,
             filename=file.filename,
-            records_count=estimated_records,
+            records_count=records_count,
             status="success",
-            message=f"Archivo cargado exitosamente. {estimated_records} registros detectados."
+            message=f"Archivo cargado exitosamente. {records_count:,} registros detectados."
         )
         
     except HTTPException as he:

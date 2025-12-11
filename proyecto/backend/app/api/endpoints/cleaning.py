@@ -31,20 +31,31 @@ def simulate_cleaning_process(job_id: str, config: CleaningConfig):
         # Actualizar estado a running
         cleaning_service.update_job_progress(job_id, 10, "running")
         
-        # Generar datos de ejemplo para demostración
-        # En producción, leerías desde Delta Lake
+        # Generar datos de ejemplo con problemas realistas
         np.random.seed(42)
+        n_records = 1000
+        
         sample_data = pd.DataFrame({
-            'case_id': range(1000),
-            'age': np.random.randint(0, 100, 1000),
-            'symptoms': np.random.choice(['fever', 'cough', 'fatigue', None], 1000),
-            'severity': np.random.choice(['leve', 'moderado', 'grave'], 1000),
-            'date': pd.date_range('2024-01-01', periods=1000, freq='H')
+            'case_id': range(n_records),
+            'age': np.random.randint(0, 100, n_records),
+            'symptoms': np.random.choice(['fever', 'cough', 'fatigue', None, ''], n_records),
+            'severity': np.random.choice(['leve', 'moderado', 'grave', None], n_records),
+            'date': pd.date_range('2024-01-01', periods=n_records, freq='H'),
+            'temperature': np.random.uniform(35.0, 42.0, n_records)
         })
         
-        # Añadir algunos duplicados y nulos para demostración
-        sample_data = pd.concat([sample_data, sample_data.head(50)])  # Duplicados
-        sample_data.loc[50:100, 'symptoms'] = None  # Nulos
+        # Añadir duplicados (10%)
+        n_duplicates = int(n_records * 0.1)
+        duplicates = sample_data.sample(n=n_duplicates)
+        sample_data = pd.concat([sample_data, duplicates], ignore_index=True)
+        
+        # Añadir nulos (15%)
+        null_indices = np.random.choice(len(sample_data), int(len(sample_data) * 0.15), replace=False)
+        sample_data.loc[null_indices, 'symptoms'] = None
+        
+        # Añadir outliers en temperatura
+        outlier_indices = np.random.choice(len(sample_data), 20, replace=False)
+        sample_data.loc[outlier_indices, 'temperature'] = np.random.choice([30.0, 50.0], 20)
         
         cleaning_service.update_job_progress(job_id, 30, "running")
         
@@ -59,6 +70,12 @@ def simulate_cleaning_process(job_id: str, config: CleaningConfig):
         df_clean, results = cleaning_service.clean_covid_data(sample_data, config_dict)
         
         cleaning_service.update_job_progress(job_id, 80, "running")
+        
+        # Enriquecer resultados con métricas adicionales
+        results['clean_records'] = len(df_clean)
+        results['data_quality_score'] = round(
+            (len(df_clean) / results['original_records']) * 100, 2
+        )
         
         # En producción, aquí guardarías en Delta Lake
         # databricks_service.save_to_processed_table(df_clean)
@@ -115,7 +132,7 @@ async def run_cleaning_job(
         return CleaningJobResponse(
             job_id=job_id,
             status=ProcessStatus.RUNNING,
-            message=f"Job de limpieza iniciado. Use GET /clean/status/{job_id} para consultar el progreso.",
+            message=f"Job de limpieza iniciado. Use GET /api/clean/status/{job_id} para consultar el progreso.",
             started_at=datetime.now()
         )
     
@@ -167,6 +184,7 @@ async def get_cleaning_history():
             "status": job_data["status"],
             "progress": job_data["progress"],
             "started_at": job_data["started_at"].isoformat(),
+            "completed_at": job_data.get("completed_at").isoformat() if job_data.get("completed_at") else None,
             "config": job_data["config"]
         })
     
@@ -205,12 +223,12 @@ async def validate_data_quality():
         quality_report = cleaning_service.validate_data_quality(sample_data)
         
         return {
-            "quality_score": 85.5,  # Score calculado basado en métricas
+            "quality_score": 85.5,
             "report": quality_report,
             "recommendations": [
                 "Columna 'symptoms' tiene alto porcentaje de nulos (21%)",
                 "Considere usar estrategia 'fill_mean' para valores nulos",
-                "Se detectaron 50 duplicados potenciales"
+                "Se detectaron duplicados potenciales"
             ]
         }
     
