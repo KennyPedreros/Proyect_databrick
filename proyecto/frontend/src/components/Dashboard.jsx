@@ -5,6 +5,7 @@ import {
   AlertCircle,
   Activity,
   Download,
+  RefreshCw,
 } from "lucide-react";
 import {
   LineChart,
@@ -21,73 +22,49 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { fetchDashboardMetrics } from "../services/dashboardAPI";
+import api from "../services/api";
 
 function Dashboard() {
   const [metrics, setMetrics] = useState(null);
+  const [timeSeries, setTimeSeries] = useState([]);
+  const [severityData, setSeverityData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    loadMetrics();
+    loadAllData();
   }, []);
 
-  const loadMetrics = async () => {
+  const loadAllData = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const data = await fetchDashboardMetrics();
-      setMetrics(data);
-    } catch (error) {
-      console.error("Error loading metrics:", error);
+      // Cargar métricas principales
+      const metricsRes = await api.get("/api/dashboard/metrics");
+      setMetrics(metricsRes.data);
+
+      // Cargar series temporales
+      const timeSeriesRes = await api.get("/api/dashboard/timeseries?days=30");
+      setTimeSeries(timeSeriesRes.data.data || []);
+
+      // Cargar distribución de severidad
+      const severityRes = await api.get("/api/classify/distribution");
+      const distribution = severityRes.data.distribution || {};
+      
+      setSeverityData([
+        { name: "Leve", value: distribution.Leve || 0, color: "#4CAF50" },
+        { name: "Moderado", value: distribution.Moderado || 0, color: "#FFC107" },
+        { name: "Grave", value: distribution.Grave || 0, color: "#FF5722" },
+        { name: "Crítico", value: distribution.Crítico || 0, color: "#9C27B0" },
+      ]);
+
+    } catch (err) {
+      console.error("Error cargando datos:", err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
-
-  // Datos de ejemplo
-  const timeSeriesData = [
-    { date: "2024-01", casos: 4000, muertes: 240, vacunados: 3000 },
-    { date: "2024-02", casos: 3000, muertes: 180, vacunados: 4500 },
-    { date: "2024-03", casos: 2000, muertes: 120, vacunados: 6000 },
-    { date: "2024-04", casos: 2780, muertes: 167, vacunados: 7200 },
-    { date: "2024-05", casos: 1890, muertes: 113, vacunados: 8500 },
-  ];
-
-  const severityData = [
-    { name: "Leve", value: 400, color: "#4CAF50" },
-    { name: "Moderado", value: 300, color: "#FFC107" },
-    { name: "Grave", value: 200, color: "#FF5722" },
-    { name: "Crítico", value: 100, color: "#9C27B0" },
-  ];
-
-  const stats = [
-    {
-      title: "Total Casos",
-      value: "15,234",
-      change: "-12%",
-      icon: Users,
-      color: "bg-blue-500",
-    },
-    {
-      title: "Casos Activos",
-      value: "1,845",
-      change: "-8%",
-      icon: Activity,
-      color: "bg-espe-green",
-    },
-    {
-      title: "Recuperados",
-      value: "12,456",
-      change: "+5%",
-      icon: TrendingUp,
-      color: "bg-green-500",
-    },
-    {
-      title: "Fallecidos",
-      value: "933",
-      change: "-3%",
-      icon: AlertCircle,
-      color: "bg-red-500",
-    },
-  ];
 
   if (loading) {
     return (
@@ -96,6 +73,57 @@ function Dashboard() {
       </div>
     );
   }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+        <div className="flex items-center gap-3">
+          <AlertCircle className="text-red-600" size={24} />
+          <div>
+            <h3 className="font-bold text-red-900">Error al cargar datos</h3>
+            <p className="text-sm text-red-800 mt-1">{error}</p>
+            <button
+              onClick={loadAllData}
+              className="mt-3 text-sm text-red-600 underline"
+            >
+              Reintentar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const stats = [
+    {
+      title: "Total Casos",
+      value: metrics?.total_cases?.toLocaleString() || "0",
+      change: "-12%",
+      icon: Users,
+      color: "bg-blue-500",
+    },
+    {
+      title: "Casos Activos",
+      value: metrics?.active_cases?.toLocaleString() || "0",
+      change: "-8%",
+      icon: Activity,
+      color: "bg-espe-green",
+    },
+    {
+      title: "Recuperados",
+      value: metrics?.recovered?.toLocaleString() || "0",
+      change: "+5%",
+      icon: TrendingUp,
+      color: "bg-green-500",
+    },
+    {
+      title: "Fallecidos",
+      value: metrics?.deaths?.toLocaleString() || "0",
+      change: "-3%",
+      icon: AlertCircle,
+      color: "bg-red-500",
+    },
+  ];
 
   return (
     <div className="space-y-6 fade-in">
@@ -106,10 +134,16 @@ function Dashboard() {
             Dashboard COVID-19
           </h1>
           <p className="text-gray-600 mt-1">Módulo 5: Visualización de Datos</p>
+          <p className="text-xs text-gray-500 mt-1">
+            Última actualización: {metrics?.last_updated ? new Date(metrics.last_updated).toLocaleString() : "N/A"}
+          </p>
         </div>
-        <button className="flex items-center gap-2 bg-espe-green text-white px-4 py-2 rounded-lg hover:bg-espe-green-light transition-colors">
-          <Download size={20} />
-          Exportar Reporte
+        <button 
+          onClick={loadAllData}
+          className="flex items-center gap-2 bg-espe-green text-white px-4 py-2 rounded-lg hover:bg-espe-green-light transition-colors"
+        >
+          <RefreshCw size={20} />
+          Actualizar
         </button>
       </div>
 
@@ -152,35 +186,44 @@ function Dashboard() {
         {/* Time Series Chart */}
         <div className="bg-white rounded-xl shadow-md p-6">
           <h3 className="text-lg font-bold text-espe-dark mb-4">
-            Evolución Temporal
+            Evolución Temporal (últimos 30 días)
           </h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={timeSeriesData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="casos"
-                stroke="#2196F3"
-                strokeWidth={2}
-              />
-              <Line
-                type="monotone"
-                dataKey="muertes"
-                stroke="#F44336"
-                strokeWidth={2}
-              />
-              <Line
-                type="monotone"
-                dataKey="vacunados"
-                stroke="#4CAF50"
-                strokeWidth={2}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          {timeSeries.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={timeSeries}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="casos"
+                  stroke="#2196F3"
+                  strokeWidth={2}
+                  name="Casos"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="muertes"
+                  stroke="#F44336"
+                  strokeWidth={2}
+                  name="Muertes"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="vacunados"
+                  stroke="#4CAF50"
+                  strokeWidth={2}
+                  name="Vacunados"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center text-gray-500">
+              No hay datos de series temporales disponibles
+            </div>
+          )}
         </div>
 
         {/* Severity Distribution */}
@@ -188,27 +231,34 @@ function Dashboard() {
           <h3 className="text-lg font-bold text-espe-dark mb-4">
             Distribución por Severidad
           </h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={severityData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) =>
-                  `${name} ${(percent * 100).toFixed(0)}%`
-                }
-                outerRadius={100}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {severityData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+          {severityData.some(d => d.value > 0) ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={severityData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) =>
+                    percent > 0 ? `${name} ${(percent * 100).toFixed(0)}%` : ''
+                  }
+                  outerRadius={100}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {severityData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center text-gray-500">
+              No hay casos clasificados todavía. <br />
+              Ve al módulo de Clasificación para etiquetar casos.
+            </div>
+          )}
         </div>
       </div>
 
@@ -217,17 +267,39 @@ function Dashboard() {
         <h3 className="text-lg font-bold text-espe-dark mb-4">
           Comparativa Mensual
         </h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={timeSeriesData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="date" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            <Bar dataKey="casos" fill="#1B5E20" />
-            <Bar dataKey="vacunados" fill="#4CAF50" />
-          </BarChart>
-        </ResponsiveContainer>
+        {timeSeries.length > 0 ? (
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={timeSeries}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="casos" fill="#1B5E20" name="Casos" />
+              <Bar dataKey="vacunados" fill="#4CAF50" name="Vacunados" />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="h-[300px] flex items-center justify-center text-gray-500">
+            No hay datos disponibles para mostrar
+          </div>
+        )}
+      </div>
+
+      {/* Info */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="flex gap-3">
+          <AlertCircle className="text-blue-600 flex-shrink-0" size={20} />
+          <div>
+            <h4 className="font-semibold text-blue-900">Estado del Sistema</h4>
+            <p className="text-sm text-blue-800 mt-1">
+              {metrics?.total_cases > 0 
+                ? `Hay ${metrics.total_cases} casos en el sistema. Datos actualizados desde Databricks.`
+                : "No hay datos cargados todavía. Usa el módulo de Carga de Datos para subir un archivo CSV."
+              }
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );

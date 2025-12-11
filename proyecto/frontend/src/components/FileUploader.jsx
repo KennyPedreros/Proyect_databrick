@@ -1,18 +1,34 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Upload,
   File,
   CheckCircle,
   XCircle,
   AlertTriangle,
+  Database,
 } from "lucide-react";
-import { uploadCovidData, fetchDataSources } from "../services/ingestionAPI";
+import { uploadCovidData } from "../services/ingestionAPI";
+import api from "../services/api";
 
 function FileUploader() {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState(null);
   const [dragActive, setDragActive] = useState(false);
+  const [uploadHistory, setUploadHistory] = useState([]);
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  const loadHistory = async () => {
+    try {
+      const response = await api.get("/api/ingest/history");
+      setUploadHistory(response.data.uploads || []);
+    } catch (error) {
+      console.error("Error loading history:", error);
+    }
+  };
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -54,11 +70,13 @@ function FileUploader() {
         details: response,
       });
       setFile(null);
+      // Recargar historial
+      loadHistory();
     } catch (error) {
       setResult({
         success: false,
         message: "Error al cargar el archivo",
-        error: error.message,
+        error: error.response?.data?.detail || error.message,
       });
     } finally {
       setUploading(false);
@@ -107,7 +125,7 @@ function FileUploader() {
             Seleccionar Archivo
           </label>
           <p className="text-sm text-gray-500 mt-4">
-            Formatos soportados: CSV, Excel (.xlsx), JSON
+            Formatos soportados: CSV, Excel (.xlsx), JSON (máx 50MB)
           </p>
         </div>
 
@@ -160,9 +178,11 @@ function FileUploader() {
                   {result.message}
                 </p>
                 {result.details && (
-                  <p className="text-sm text-gray-700 mt-1">
-                    Registros procesados: {result.details.records_count}
-                  </p>
+                  <div className="text-sm text-gray-700 mt-2">
+                    <p>ID de ingesta: {result.details.ingestion_id}</p>
+                    <p>Registros procesados: {result.details.records_count}</p>
+                    <p>Archivo: {result.details.filename}</p>
+                  </div>
                 )}
                 {result.error && (
                   <p className="text-sm text-red-700 mt-1">{result.error}</p>
@@ -172,6 +192,46 @@ function FileUploader() {
           </div>
         )}
       </div>
+
+      {/* Upload History */}
+      {uploadHistory.length > 0 && (
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Database className="text-espe-green" size={20} />
+            <h3 className="text-lg font-bold text-espe-dark">
+              Archivos Cargados
+            </h3>
+          </div>
+          
+          <div className="space-y-3">
+            {uploadHistory.map((upload, idx) => (
+              <div
+                key={idx}
+                className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-espe-dark">
+                      {upload.filename}
+                    </p>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {upload.records_count?.toLocaleString()} registros
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-gray-500">
+                      {new Date(upload.uploaded_at).toLocaleString()}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      ID: {upload.ingestion_id}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Info Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
