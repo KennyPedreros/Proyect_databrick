@@ -20,6 +20,10 @@ class DatabricksService:
     def connect(self):
         """Establece conexión con Databricks SQL Warehouse"""
         try:
+            if not self.host or not self.token or not self.cluster_id:
+                logger.warning("Databricks credentials not configured")
+                return False
+                
             self.connection = sql.connect(
                 server_hostname=self.host,
                 http_path=f"/sql/1.0/warehouses/{self.cluster_id}",
@@ -34,28 +38,36 @@ class DatabricksService:
     def disconnect(self):
         """Cierra la conexión"""
         if self.connection:
-            self.connection.close()
-            logger.info("Conexión cerrada")
+            try:
+                self.connection.close()
+                logger.info("Conexión cerrada")
+            except Exception as e:
+                logger.error(f"Error cerrando conexión: {str(e)}")
     
     def execute_query(self, query: str):
         """Ejecuta una consulta SQL y retorna resultados"""
         if not self.connection:
-            self.connect()
+            if not self.connect():
+                return []
         
         try:
             cursor = self.connection.cursor()
             cursor.execute(query)
             
             # Obtener resultados
-            columns = [desc[0] for desc in cursor.description]
-            rows = cursor.fetchall()
+            if cursor.description:
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                results = [dict(zip(columns, row)) for row in rows]
+            else:
+                results = []
             
-            results = [dict(zip(columns, row)) for row in rows]
             cursor.close()
-            
             return results
+            
         except Exception as e:
             logger.error(f"Error ejecutando query: {str(e)}")
+            logger.error(f"Query: {query}")
             raise
     
     def create_catalog_and_schema(self):
@@ -85,7 +97,6 @@ class DatabricksService:
             record_count INT
         )
         USING DELTA
-        LOCATION 'dbfs:/mnt/covid/raw/'
         """
         
         try:
@@ -107,13 +118,14 @@ class DatabricksService:
             gender STRING,
             symptoms STRING,
             severity STRING,
-            vaccinated BOOLEAN,
             outcome STRING,
+            vaccinated BOOLEAN,
+            medical_history STRING,
+            classification_confidence DOUBLE,
+            classified_at TIMESTAMP,
             processed_at TIMESTAMP
         )
         USING DELTA
-        PARTITIONED BY (date)
-        LOCATION 'dbfs:/mnt/covid/processed/'
         """
         
         try:
@@ -121,6 +133,28 @@ class DatabricksService:
             logger.info("✅ Tabla PROCESSED creada/verificada")
         except Exception as e:
             logger.error(f"Error creando tabla PROCESSED: {str(e)}")
+            raise
+    
+    def create_audit_table(self):
+        """Crea tabla para logs de auditoría"""
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.audit_logs (
+            log_id STRING,
+            timestamp TIMESTAMP,
+            process STRING,
+            level STRING,
+            message STRING,
+            user_id STRING,
+            metadata STRING
+        )
+        USING DELTA
+        """
+        
+        try:
+            self.execute_query(query)
+            logger.info("✅ Tabla AUDIT creada/verificada")
+        except Exception as e:
+            logger.error(f"Error creando tabla AUDIT: {str(e)}")
             raise
     
     def insert_raw_data(self, ingestion_id: str, filename: str, 
@@ -171,67 +205,30 @@ class DatabricksService:
         except Exception as e:
             logger.error(f"Error contando registros: {str(e)}")
             return 0
-
-    def create_audit_logs_table(self):
-    """Crea tabla para logs de auditoría"""
-    query = f"""
-    CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.audit_logs (
-        event_id STRING,
-        timestamp TIMESTAMP,
-        process STRING,
-        level STRING,
-        message STRING,
-        data STRING,
-        user STRING,
-        created_at TIMESTAMP DEFAULT current_timestamp()
-    )
-    USING DELTA
-    PARTITIONED BY (DATE(timestamp))
-    LOCATION 'dbfs:/mnt/covid/audit_logs/'
-    """
-    self.execute_query(query)
-    logger.info("✅ Tabla audit_logs creada/verificada")
-
-    def create_alerts_table(self):
-        """Crea tabla para alertas del sistema"""
+    
+    def insert_audit_log(self, log_id: str, process: str, level: str, 
+                        message: str, user_id: str = None, metadata: str = None):
+        """Inserta log de auditoría"""
         query = f"""
-        CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.system_alerts (
-            alert_id STRING,
-            timestamp TIMESTAMP,
-            alert_type STRING,
-            level STRING,
-            title STRING,
-            message STRING,
-            metadata STRING,
-            acknowledged BOOLEAN,
-            acknowledged_at TIMESTAMP
+        INSERT INTO {self.catalog}.{self.schema}.audit_logs
+        VALUES (
+            '{log_id}',
+            current_timestamp(),
+            '{process}',
+            '{level}',
+            '{message}',
+            {f"'{user_id}'" if user_id else 'NULL'},
+            {f"'{metadata}'" if metadata else 'NULL'}
         )
-        USING DELTA
-        PARTITIONED BY (DATE(timestamp))
-        LOCATION 'dbfs:/mnt/covid/alerts/'
         """
-        self.execute_query(query)
-        logger.info("✅ Tabla system_alerts creada/verificada")
+        
+        try:
+            self.execute_query(query)
+            return True
+        except Exception as e:
+            logger.error(f"Error insertando log de auditoría: {str(e)}")
+            return False
 
-    def create_health_checks_table(self):
-        """Crea tabla para health checks"""
-        query = f"""
-        CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.health_checks (
-            check_id STRING,
-            timestamp TIMESTAMP,
-            check_type STRING,
-            metric_name STRING,
-            metric_value DOUBLE,
-            threshold DOUBLE,
-            status STRING,
-            details STRING
-        )
-        USING DELTA
-        PARTITIONED BY (DATE(timestamp))
-        LOCATION 'dbfs:/mnt/covid/health_checks/'
-        """
-        self.execute_query(query)
-        logger.info("✅ Tabla health_checks creada/verificada")
 
 # Instancia global del servicio
 databricks_service = DatabricksService()

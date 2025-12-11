@@ -1,42 +1,48 @@
 import axios from "axios";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+// IMPORTANTE: La URL base NO debe incluir /api porque ya está en vite.config.js
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const api = axios.create({
   baseURL: API_URL,
   headers: {
     "Content-Type": "application/json",
   },
+  timeout: 30000, // 30 segundos de timeout
 });
 
 // Interceptor para requests
 api.interceptors.request.use(
   (config) => {
-    // Aquí puedes agregar tokens de autenticación si es necesario
-    // const token = localStorage.getItem('token');
-    // if (token) {
-    //   config.headers.Authorization = `Bearer ${token}`;
-    // }
+    console.log(`🔵 REQUEST: ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
     return config;
   },
   (error) => {
+    console.error("❌ REQUEST ERROR:", error);
     return Promise.reject(error);
   }
 );
 
 // Interceptor para responses
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    console.log(`✅ RESPONSE: ${response.config.method.toUpperCase()} ${response.config.url} - ${response.status}`);
+    return response;
+  },
   (error) => {
     if (error.response) {
       // El servidor respondió con un código de error
-      console.error("Error response:", error.response.data);
+      console.error("❌ ERROR RESPONSE:", {
+        status: error.response.status,
+        url: error.config.url,
+        data: error.response.data
+      });
     } else if (error.request) {
       // La petición fue hecha pero no hubo respuesta
-      console.error("Error request:", error.request);
+      console.error("❌ ERROR REQUEST (no response):", error.request);
     } else {
       // Algo pasó al configurar la petición
-      console.error("Error:", error.message);
+      console.error("❌ ERROR:", error.message);
     }
     return Promise.reject(error);
   }

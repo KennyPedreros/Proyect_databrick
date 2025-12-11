@@ -4,7 +4,7 @@ export const uploadCovidData = async (file) => {
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await api.post("/ingest/upload", formData, {
+  const response = await api.post("/api/ingest/upload", formData, {
     headers: {
       "Content-Type": "multipart/form-data",
     },
@@ -14,16 +14,16 @@ export const uploadCovidData = async (file) => {
 };
 
 export const fetchDataSources = async () => {
-  const response = await api.get("/ingest/sources");
+  const response = await api.get("/api/ingest/sources");
   return response.data;
 };
 
 export const validateSchema = async (fileId) => {
-  const response = await api.post("/ingest/validate", { file_id: fileId });
+  const response = await api.post("/api/ingest/validate", { file_id: fileId });
   return response.data;
 };
 
 export const getIngestionStatus = async (ingestionId) => {
-  const response = await api.get(`/ingest/status/${ingestionId}`);
+  const response = await api.get(`/api/ingest/status/${ingestionId}`);
   return response.data;
 };

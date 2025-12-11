@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     
     # CORS Origins (Frontend)
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173"]
+    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"]
     
     # Databricks Configuration
     DATABRICKS_HOST: Optional[str] = None

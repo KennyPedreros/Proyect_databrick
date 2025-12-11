@@ -6,9 +6,15 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // Esto redirige todas las peticiones que empiecen con /api al backend
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
+        secure: false,
+        rewrite: (path) => {
+          console.log(`🔄 PROXY: ${path}`);
+          return path;
+        }
       },
     },
   },
