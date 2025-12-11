@@ -4,8 +4,10 @@ from app.config.settings import settings
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import StorageStatus, SuccessResponse
 from app.services.databricks_service import databricks_service
+from app.api.endpoints import ingestion, storage, classification
 from typing import Dict, Any
 from app.api.endpoints import ingestion, storage
+from app.api.endpoints import ingestion, storage, classification, dashboard
 import logging
 
 
@@ -126,6 +128,12 @@ app.include_router(ingestion.router)
 
 # Módulo 2: Almacenamiento
 app.include_router(storage.router)
+
+#Módulo 4
+app.include_router(classification.router)
+
+#Módulo 5
+app.include_router(dashboard.router)
 
 # Si quieres ver todos los endpoints disponibles
 @app.get("/api/routes")
