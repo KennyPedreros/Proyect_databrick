@@ -172,6 +172,66 @@ class DatabricksService:
             logger.error(f"Error contando registros: {str(e)}")
             return 0
 
+    def create_audit_logs_table(self):
+    """Crea tabla para logs de auditoría"""
+    query = f"""
+    CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.audit_logs (
+        event_id STRING,
+        timestamp TIMESTAMP,
+        process STRING,
+        level STRING,
+        message STRING,
+        data STRING,
+        user STRING,
+        created_at TIMESTAMP DEFAULT current_timestamp()
+    )
+    USING DELTA
+    PARTITIONED BY (DATE(timestamp))
+    LOCATION 'dbfs:/mnt/covid/audit_logs/'
+    """
+    self.execute_query(query)
+    logger.info("✅ Tabla audit_logs creada/verificada")
+
+    def create_alerts_table(self):
+        """Crea tabla para alertas del sistema"""
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.system_alerts (
+            alert_id STRING,
+            timestamp TIMESTAMP,
+            alert_type STRING,
+            level STRING,
+            title STRING,
+            message STRING,
+            metadata STRING,
+            acknowledged BOOLEAN,
+            acknowledged_at TIMESTAMP
+        )
+        USING DELTA
+        PARTITIONED BY (DATE(timestamp))
+        LOCATION 'dbfs:/mnt/covid/alerts/'
+        """
+        self.execute_query(query)
+        logger.info("✅ Tabla system_alerts creada/verificada")
+
+    def create_health_checks_table(self):
+        """Crea tabla para health checks"""
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.health_checks (
+            check_id STRING,
+            timestamp TIMESTAMP,
+            check_type STRING,
+            metric_name STRING,
+            metric_value DOUBLE,
+            threshold DOUBLE,
+            status STRING,
+            details STRING
+        )
+        USING DELTA
+        PARTITIONED BY (DATE(timestamp))
+        LOCATION 'dbfs:/mnt/covid/health_checks/'
+        """
+        self.execute_query(query)
+        logger.info("✅ Tabla health_checks creada/verificada")
 
 # Instancia global del servicio
 databricks_service = DatabricksService()

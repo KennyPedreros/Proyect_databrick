@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from app.models.schemas import StorageStatus, SuccessResponse
 from app.services.databricks_service import databricks_service
 from typing import Dict, Any
-from app.api.endpoints import ingestion, storage, cleaning, classification, dashboard
+from app.api.endpoints import ingestion, storage, cleaning, classification, dashboard, monitoring, rag
 import logging
 
 
@@ -112,7 +112,7 @@ def system_info():
             "modulo_3": "✅ Completo",
             "modulo_4": "✅ Completo",
             "modulo_5": "✅ Completo",
-            "modulo_6": "🔄 Pendiente",
+            "modulo_6": "✅ Completo",
             "rag": "🔄 Pendiente"
         }
     }
@@ -130,11 +130,17 @@ app.include_router(storage.router)
 # Módulo 3: Limpieza de Datos
 app.include_router(cleaning.router)
 
-#Módulo 4
+#Módulo 4 : Clasificación y Etiquetado
 app.include_router(classification.router)
 
-#Módulo 5
+#Módulo 5 : Almacenamiento Final y Visualización
 app.include_router(dashboard.router)
+
+#módulo 6   : Monitoreo y Auditoría
+app.include_router(monitoring.router)
+
+# Extra: RAG - Consultas Inteligentes
+app.include_router(rag.router)
 
 # Si quieres ver todos los endpoints disponibles
 @app.get("/api/routes")
