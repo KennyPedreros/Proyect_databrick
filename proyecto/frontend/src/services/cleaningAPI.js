@@ -1,7 +1,9 @@
 import api from "./api";
 
 export const runCleaningJob = async (config) => {
-  const response = await api.post("/api/clean/run", config);
+  const response = await api.post("/api/clean/run", {
+    config: config
+  });
   return response.data;
 };
 

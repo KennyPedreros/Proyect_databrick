@@ -59,6 +59,36 @@ function FileUploader() {
   const handleUpload = async () => {
     if (!file) return;
 
+    // Validación del lado del cliente
+    const allowedTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/json'
+    ];
+    
+    const fileExtension = file.name.split('.').pop().toLowerCase();
+    const allowedExtensions = ['csv', 'xlsx', 'xls', 'json'];
+    
+    if (!allowedExtensions.includes(fileExtension)) {
+      setResult({
+        success: false,
+        message: "Formato de archivo no soportado",
+        error: `Solo se permiten archivos: ${allowedExtensions.join(', ').toUpperCase()}`
+      });
+      return;
+    }
+
+    const maxSize = 500 * 1024 * 1024; // 500MB
+    if (file.size > maxSize) {
+      setResult({
+        success: false,
+        message: "Archivo demasiado grande",
+        error: `El archivo debe ser menor a 500MB. Tamaño actual: ${(file.size / 1024 / 1024).toFixed(2)}MB`
+      });
+      return;
+    }
+
     setUploading(true);
     setResult(null);
 
@@ -70,9 +100,9 @@ function FileUploader() {
         details: response,
       });
       setFile(null);
-      // Recargar historial
       loadHistory();
     } catch (error) {
+      console.error("Error uploading file:", error);
       setResult({
         success: false,
         message: "Error al cargar el archivo",

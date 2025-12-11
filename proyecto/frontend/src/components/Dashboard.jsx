@@ -48,15 +48,15 @@ function Dashboard() {
       setTimeSeries(timeSeriesRes.data.data || []);
 
       // Cargar distribución de severidad
-      const severityRes = await api.get("/api/classify/distribution");
-      const distribution = severityRes.data.distribution || {};
-      
-      setSeverityData([
-        { name: "Leve", value: distribution.Leve || 0, color: "#4CAF50" },
-        { name: "Moderado", value: distribution.Moderado || 0, color: "#FFC107" },
-        { name: "Grave", value: distribution.Grave || 0, color: "#FF5722" },
-        { name: "Crítico", value: distribution.Crítico || 0, color: "#9C27B0" },
-      ]);
+      const severityRes = await api.get("/api/dashboard/severity-distribution");
+      const severityArray = severityRes.data || [];
+      if (severityArray.length === 0) {
+        setSeverityData([
+          { name: "Sin datos", value: 1, color: "#999999" }
+        ]);
+      } else {
+        setSeverityData(severityArray);
+      }
 
     } catch (err) {
       console.error("Error cargando datos:", err);

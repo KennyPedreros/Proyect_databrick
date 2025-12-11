@@ -16,7 +16,14 @@ function DataCleaner() {
   const handleStartCleaning = async () => {
     setRunning(true);
     try {
-      const response = await runCleaningJob(config);
+      // Convertir config a snake_case para el backend
+      const backendConfig = {
+        remove_duplicates: config.removeDuplicates,
+        handle_missing: config.handleMissing,
+        detect_outliers: config.detectOutliers,
+        standardize_formats: config.standardizeFormats,
+      };
+      const response = await runCleaningJob(backendConfig);
       setJobId(response.job_id);
       pollJobStatus(response.job_id);
     } catch (error) {

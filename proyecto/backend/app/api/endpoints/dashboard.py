@@ -159,10 +159,7 @@ async def get_timeseries_data(days: int = 30):
 
 @router.get("/severity-distribution")
 async def get_severity_distribution():
-    """
-    Distribución de casos por severidad
-    Para gráfica de pastel
-    """
+    """Distribución de casos por severidad"""
     try:
         if databricks_service.connect():
             query = f"""
@@ -170,7 +167,7 @@ async def get_severity_distribution():
                 severity,
                 COUNT(*) as value
             FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
-            WHERE severity IS NOT NULL
+            WHERE severity IS NOT NULL AND severity != ''
             GROUP BY severity
             """
             
@@ -178,7 +175,6 @@ async def get_severity_distribution():
             databricks_service.disconnect()
             
             if results and len(results) > 0:
-                # Mapear colores
                 color_map = {
                     "Leve": "#4CAF50",
                     "Moderado": "#FFC107",
@@ -208,13 +204,8 @@ async def get_severity_distribution():
         logger.error(f"Error obteniendo distribución: {str(e)}")
         databricks_service.disconnect()
         
-        # Retornar distribución simulada
-        return [
-            {"name": "Leve", "value": 450, "color": "#4CAF50"},
-            {"name": "Moderado", "value": 320, "color": "#FFC107"},
-            {"name": "Grave", "value": 180, "color": "#FF5722"},
-            {"name": "Crítico", "value": 50, "color": "#9C27B0"}
-        ]
+        # Retornar distribución vacía en lugar de error
+        return []
 
 
 @router.get("/geographic")
