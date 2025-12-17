@@ -1,3 +1,4 @@
+from app.services.monitoring_service import monitoring_service, LogLevel
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import ClassificationResult, ModelMetrics
 from app.services.databricks_service import databricks_service
@@ -109,6 +110,16 @@ async def classify_cases():
         
         logger.info(f"✅ Clasificados {len(cases)} casos")
         
+        monitoring_service.log_event(
+            process="Clasificación",
+            level=LogLevel.SUCCESS,
+            message=f"Clasificados {len(cases)} casos",
+            data={
+                "total_classified": len(cases),
+                "distribution": distribution
+            }
+)
+
         return ClassificationResult(
             classification_id=str(uuid.uuid4()),
             total_classified=len(cases),

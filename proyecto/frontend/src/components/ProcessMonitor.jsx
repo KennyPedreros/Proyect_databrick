@@ -9,97 +9,9 @@ import {
 import { fetchLogs, fetchProcessStatus } from "../services/monitoringAPI";
 
 function ProcessMonitor() {
-  const [processes, setProcesses] = useState([
-    // Datos de ejemplo mientras no haya backend
-    {
-      name: "Ingesta de Datos",
-      description: "Carga de archivos CSV",
-      status: "completed",
-      last_run: "10:30 AM",
-      duration: "2m 15s",
-      progress: 100,
-    },
-    {
-      name: "Limpieza de Datos",
-      description: "Procesamiento Spark",
-      status: "running",
-      last_run: "10:45 AM",
-      duration: "5m 30s",
-      progress: 65,
-    },
-    {
-      name: "Clasificación ML",
-      description: "Auto-etiquetado",
-      status: "pending",
-      last_run: "09:20 AM",
-      duration: null,
-      progress: 0,
-    },
-    {
-      name: "Generación Dashboard",
-      description: "Agregaciones",
-      status: "completed",
-      last_run: "10:15 AM",
-      duration: "1m 45s",
-      progress: 100,
-    },
-    {
-      name: "Backup Delta Lake",
-      description: "Respaldo de datos",
-      status: "failed",
-      last_run: "08:00 AM",
-      duration: "30s",
-      progress: 100,
-    },
-    {
-      name: "Auditoría",
-      description: "Logs del sistema",
-      status: "completed",
-      last_run: "10:50 AM",
-      duration: "45s",
-      progress: 100,
-    },
-  ]);
+  const [processes, setProcesses] = useState([]);
 
-  const [logs, setLogs] = useState([
-    // Datos de ejemplo
-    {
-      timestamp: "2024-11-12 10:50:23",
-      process: "Auditoría",
-      level: "INFO",
-      message: "Audit report generated successfully",
-    },
-    {
-      timestamp: "2024-11-12 10:45:10",
-      process: "Limpieza",
-      level: "INFO",
-      message: "Cleaning job started for dataset_20241112",
-    },
-    {
-      timestamp: "2024-11-12 10:30:45",
-      process: "Ingesta",
-      level: "SUCCESS",
-      message: "File uploaded: covid_cases_2024.csv (15,234 records)",
-    },
-    {
-      timestamp: "2024-11-12 10:15:30",
-      process: "Dashboard",
-      level: "INFO",
-      message: "KPIs updated successfully",
-    },
-    {
-      timestamp: "2024-11-12 08:00:15",
-      process: "Backup",
-      level: "ERROR",
-      message: "Connection timeout to storage service",
-    },
-    {
-      timestamp: "2024-11-12 07:30:00",
-      process: "Clasificación",
-      level: "WARNING",
-      message: "Model confidence below threshold (0.75)",
-    },
-  ]);
+  const [logs, setLogs] = useState([]);
 
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -114,34 +26,25 @@ function ProcessMonitor() {
   }, [autoRefresh]);
 
   const loadData = async () => {
-    setLoading(true);
-    try {
-      // Cuando tengas backend, descomenta esto:
-      // const [processData, logsData] = await Promise.all([
-      //   fetchProcessStatus(),
-      //   fetchLogs()
-      // ]);
-      // setProcesses(processData);
-      // setLogs(logsData);
-
-      // Simulación de actualización
-      setProcesses((prev) =>
-        prev.map((p) => {
-          if (p.status === "running" && p.progress < 100) {
-            return {
-              ...p,
-              progress: Math.min(100, p.progress + Math.random() * 10),
-            };
-          }
-          return p;
-        })
-      );
-    } catch (error) {
-      console.error("Error loading monitoring data:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  setLoading(true);
+  setError(null);
+  try {
+    // REEMPLAZAR con llamadas reales:
+    const [processData, logsData] = await Promise.all([
+      fetchProcessStatus(),
+      fetchLogs()
+    ]);
+    
+    setProcesses(processData.processes || []);
+    setLogs(logsData.logs || []);
+    
+  } catch (error) {
+    console.error("Error loading monitoring data:", error);
+    setError(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const statusColors = {
     running: "bg-blue-100 text-blue-800 border-blue-300",

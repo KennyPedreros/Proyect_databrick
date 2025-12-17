@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from app.services.monitoring_service import monitoring_service, LogLevel
 from app.models.schemas import IngestionResponse, DataSourceInfo, SuccessResponse
 from typing import List
 import uuid
@@ -78,8 +79,13 @@ async def upload_covid_data(file: UploadFile = File(...)):
         
         logger.info(f"Recibiendo archivo: {file.filename}")
         
-        # Leer contenido del archivo
-        contents = await file.read()
+        # MODIFICAR: Leer archivo en chunks para archivos grandes
+        contents = bytearray()
+        chunk_size = 1024 * 1024  # 1MB chunks
+        
+        while chunk := await file.read(chunk_size):
+            contents.extend(chunk)
+        
         file_size = len(contents)
         
         logger.info(f"Tamaño del archivo: {file_size / 1024 / 1024:.2f}MB")
@@ -92,15 +98,54 @@ async def upload_covid_data(file: UploadFile = File(...)):
         
         # Contar registros reales
         logger.info("Contando registros...")
-        records_count = count_records_from_file(contents, file.filename)
+        records_count = count_records_from_file(bytes(contents), file.filename)
         
         if records_count == 0:
             raise HTTPException(
                 status_code=400,
-                detail="No se encontraron registros en el archivo. Verifica que el archivo contenga datos."
+                detail="No se encontraron registros en el archivo."
             )
         
         logger.info(f"Registros encontrados: {records_count}")
+        
+        # AGREGAR: Guardar en Databricks
+        if databricks_service.connect():
+            try:
+                # Convertir a DataFrame
+                import io
+                if file.filename.endswith('.csv'):
+                    df = pd.read_csv(io.BytesIO(contents))
+                elif file.filename.endswith(('.xlsx', '.xls')):
+                    df = pd.read_excel(io.BytesIO(contents))
+                elif file.filename.endswith('.json'):
+                    df = pd.read_json(io.BytesIO(contents))
+                
+                # Insertar registros en Delta Lake
+                for _, row in df.iterrows():
+                    query = f"""
+                    INSERT INTO {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+                    (case_id, date, country, region, age, gender, symptoms, severity, outcome, vaccinated, processed_at)
+                    VALUES (
+                        '{row.get('case_id', f'CASE-{uuid.uuid4().hex[:8].upper()}')}',
+                        '{row.get('date', datetime.now().strftime('%Y-%m-%d'))}',
+                        '{row.get('country', 'Ecuador')}',
+                        '{row.get('region', 'Unknown')}',
+                        {row.get('age', 0)},
+                        '{row.get('gender', 'Unknown')}',
+                        '{row.get('symptoms', 'Unknown')}',
+                        NULL,
+                        '{row.get('outcome', 'Activo')}',
+                        {1 if row.get('vaccinated', False) else 0},
+                        current_timestamp()
+                    )
+                    """
+                    databricks_service.execute_query(query)
+                
+                databricks_service.disconnect()
+                logger.info(f"✅ Datos guardados en Delta Lake")
+            except Exception as e:
+                logger.error(f"Error guardando en Delta Lake: {str(e)}")
+                databricks_service.disconnect()
         
         # Guardar información en la "base de datos"
         file_info = {
@@ -110,9 +155,22 @@ async def upload_covid_data(file: UploadFile = File(...)):
             "records_count": records_count,
             "uploaded_at": datetime.now()
         }
+
+        # DESPUÉS de guardar el archivo exitosamente:
+        monitoring_service.log_event(
+            process="Ingesta",
+            level=LogLevel.SUCCESS,
+            message=f"Archivo cargado: {file.filename} ({records_count} registros)",
+            data={
+                "ingestion_id": ingestion_id,
+                "filename": file.filename,
+                "records": records_count,
+                "size_mb": round(file_size / 1024 / 1024, 2)
+            }
+        )
         uploaded_files_db.append(file_info)
         
-        # Log del proceso
+        # AGREGAR: Log de auditoría
         log_ingestion_status(ingestion_id, "SUCCESS")
         
         return IngestionResponse(

@@ -32,8 +32,15 @@ function Dashboard() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
+  loadAllData();
+  
+  // AGREGAR: Auto-refresh cada 30 segundos
+  const interval = setInterval(() => {
     loadAllData();
-  }, []);
+  }, 30000);
+  
+  return () => clearInterval(interval);
+}, []);
 
   const loadAllData = async () => {
     setLoading(true);

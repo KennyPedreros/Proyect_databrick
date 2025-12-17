@@ -1,3 +1,4 @@
+from app.services.monitoring_service import monitoring_service, LogLevel
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from app.models.schemas import (
     CleaningConfig, 
@@ -35,6 +36,13 @@ def simulate_cleaning_process(job_id: str, config: CleaningConfig):
         np.random.seed(42)
         n_records = 1000
         
+        monitoring_service.log_event(
+            process="Limpieza",
+            level=LogLevel.INFO,
+            message=f"Job de limpieza iniciado: {job_id}",
+            data={"job_id": job_id, "config": config}
+        )
+
         sample_data = pd.DataFrame({
             'case_id': range(n_records),
             'age': np.random.randint(0, 100, n_records),
@@ -86,6 +94,13 @@ def simulate_cleaning_process(job_id: str, config: CleaningConfig):
         cleaning_service.complete_job(job_id, results)
         
         logger.info(f"Job {job_id} completado exitosamente")
+
+        monitoring_service.log_event(
+            process="Limpieza",
+            level=LogLevel.SUCCESS,
+            message=f"Job completado: {job_id}",
+            data={"job_id": job_id, "results": results}
+        )
         
     except Exception as e:
         logger.error(f"Error en job {job_id}: {str(e)}")

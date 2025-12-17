@@ -20,18 +20,24 @@ class ClassificationService:
         self.classification_chain = None
         self.initialize_llm()
         
-    def initialize_llm(self):
-        """Inicializa el modelo LLM de OpenAI"""
-        try:
-            if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY == "sk-tu-api-key-aqui":
-                logger.warning("OpenAI API Key no configurada. Usando clasificación básica.")
-                return
-                
-            self.llm = ChatOpenAI(
-                model="gpt-3.5-turbo",
-                temperature=0.3,
-                openai_api_key=settings.OPENAI_API_KEY
-            )
+   def initialize_llm(self):
+    """Inicializa el modelo LLM de OpenAI"""
+    try:
+        # MODIFICAR ESTA VALIDACIÓN:
+        if not settings.OPENAI_API_KEY or settings.OPENAI_API_KEY.startswith("sk-tu-api-key"):
+            logger.warning("⚠️ OpenAI API Key no configurada. Usando clasificación básica.")
+            return
+            
+        logger.info("🔑 Configurando OpenAI con API Key...")
+        
+        self.llm = ChatOpenAI(
+            model="gpt-3.5-turbo",
+            temperature=0.3,
+            openai_api_key=settings.OPENAI_API_KEY,
+            max_tokens=500  # AGREGAR esto para limitar costo
+        )
+        
+        # ... resto del código
             
             # Crear el prompt template
             prompt = ChatPromptTemplate.from_messages([

@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import settings
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.endpoints import (
     ingestion, 
     storage, 
@@ -32,8 +34,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    max_age=3600,
 )
 
+class LargeFileMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        request.scope["fastapi.request.max_body_size"] = 500 * 1024 * 1024  # 500MB
+        return await call_next(request)
+
+app.add_middleware(LargeFileMiddleware)
 # ============================================
 # EVENTOS DE INICIO Y CIERRE
 # ============================================
