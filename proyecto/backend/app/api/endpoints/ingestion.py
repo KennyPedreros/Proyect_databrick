@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from app.services.monitoring_service import monitoring_service, LogLevel
+from app.services.databricks_service import databricks_service  # ✅ AGREGADO
 from app.models.schemas import IngestionResponse, DataSourceInfo, SuccessResponse
 from typing import List
 import uuid
@@ -8,6 +9,7 @@ import os
 import pandas as pd
 import io
 import logging
+import chardet  # ✅ Para detectar encoding automáticamente
 
 router = APIRouter(prefix="/api/ingest", tags=["Módulo 1: Ingesta de Datos"])
 logger = logging.getLogger(__name__)
@@ -43,26 +45,78 @@ def log_ingestion_status(ingestion_id: str, status: str):
     """Registra el estado de la ingesta en logs"""
     logger.info(f"[INGESTION] {ingestion_id} - Status: {status} - {datetime.now()}")
 
+def detect_encoding(file_content: bytes) -> str:
+    """Detecta el encoding del archivo automáticamente"""
+    try:
+        # Usar chardet para detectar encoding
+        result = chardet.detect(file_content[:10000])  # Analizar primeros 10KB
+        encoding = result['encoding']
+        confidence = result['confidence']
+        
+        logger.info(f"Encoding detectado: {encoding} (confianza: {confidence:.2%})")
+        
+        # Si la confianza es baja, intentar con encodings comunes
+        if confidence < 0.7:
+            logger.warning(f"Baja confianza en encoding detectado, intentando alternativas...")
+            return 'latin-1'  # Fallback común para archivos con ñ, á, é, etc.
+        
+        return encoding if encoding else 'latin-1'
+    except Exception as e:
+        logger.warning(f"Error detectando encoding: {str(e)}, usando latin-1 como fallback")
+        return 'latin-1'
+
 def count_records_from_file(file_content: bytes, filename: str) -> int:
-    """Cuenta los registros reales del archivo"""
+    """Cuenta los registros reales del archivo con manejo de encoding"""
     try:
         ext = os.path.splitext(filename)[1].lower()
         
         if ext == '.csv':
-            df = pd.read_csv(io.BytesIO(file_content))
+            # Detectar encoding automáticamente
+            encoding = detect_encoding(file_content)
+            
+            # Intentar con el encoding detectado
+            try:
+                df = pd.read_csv(io.BytesIO(file_content), encoding=encoding)
+                logger.info(f"✅ CSV leído exitosamente con encoding: {encoding}")
+            except UnicodeDecodeError:
+                # Si falla, intentar con otros encodings comunes
+                logger.warning(f"Fallo con {encoding}, intentando encodings alternativos...")
+                encodings_to_try = ['latin-1', 'iso-8859-1', 'cp1252', 'utf-8']
+                
+                for enc in encodings_to_try:
+                    try:
+                        df = pd.read_csv(io.BytesIO(file_content), encoding=enc)
+                        logger.info(f"✅ CSV leído exitosamente con encoding: {enc}")
+                        break
+                    except:
+                        continue
+                else:
+                    raise Exception("No se pudo leer el archivo con ningún encoding conocido")
+        
         elif ext in ['.xlsx', '.xls']:
             df = pd.read_excel(io.BytesIO(file_content))
+            logger.info("✅ Excel leído exitosamente")
+        
         elif ext == '.json':
-            df = pd.read_json(io.BytesIO(file_content))
+            # JSON generalmente es UTF-8
+            try:
+                df = pd.read_json(io.BytesIO(file_content))
+            except UnicodeDecodeError:
+                # Intentar decodificar manualmente
+                json_str = file_content.decode('latin-1')
+                df = pd.read_json(io.StringIO(json_str))
+            logger.info("✅ JSON leído exitosamente")
+        
         else:
             return 0
         
         return len(df)
+    
     except Exception as e:
         logger.error(f"Error counting records: {str(e)}")
         raise HTTPException(
             status_code=400,
-            detail=f"No se pudo leer el archivo. Asegúrate de que sea un archivo válido. Error: {str(e)}"
+            detail=f"No se pudo leer el archivo. Error: {str(e)}. Intenta con otro formato o verifica que el archivo no esté corrupto."
         )
 
 @router.post("/upload", response_model=IngestionResponse)
@@ -79,7 +133,7 @@ async def upload_covid_data(file: UploadFile = File(...)):
         
         logger.info(f"Recibiendo archivo: {file.filename}")
         
-        # MODIFICAR: Leer archivo en chunks para archivos grandes
+        # Leer archivo en chunks para archivos grandes
         contents = bytearray()
         chunk_size = 1024 * 1024  # 1MB chunks
         
@@ -108,44 +162,71 @@ async def upload_covid_data(file: UploadFile = File(...)):
         
         logger.info(f"Registros encontrados: {records_count}")
         
-        # AGREGAR: Guardar en Databricks
+        # AGREGAR: Guardar en Databricks (SOLO si está configurado)
         if databricks_service.connect():
             try:
+                # Detectar encoding
+                encoding = detect_encoding(bytes(contents))
+                
                 # Convertir a DataFrame
-                import io
                 if file.filename.endswith('.csv'):
-                    df = pd.read_csv(io.BytesIO(contents))
+                    df = pd.read_csv(io.BytesIO(contents), encoding=encoding)
                 elif file.filename.endswith(('.xlsx', '.xls')):
                     df = pd.read_excel(io.BytesIO(contents))
                 elif file.filename.endswith('.json'):
-                    df = pd.read_json(io.BytesIO(contents))
+                    try:
+                        df = pd.read_json(io.BytesIO(contents))
+                    except:
+                        json_str = contents.decode(encoding)
+                        df = pd.read_json(io.StringIO(json_str))
                 
-                # Insertar registros en Delta Lake
-                for _, row in df.iterrows():
-                    query = f"""
-                    INSERT INTO {databricks_service.catalog}.{databricks_service.schema}.covid_processed
-                    (case_id, date, country, region, age, gender, symptoms, severity, outcome, vaccinated, processed_at)
-                    VALUES (
-                        '{row.get('case_id', f'CASE-{uuid.uuid4().hex[:8].upper()}')}',
-                        '{row.get('date', datetime.now().strftime('%Y-%m-%d'))}',
-                        '{row.get('country', 'Ecuador')}',
-                        '{row.get('region', 'Unknown')}',
-                        {row.get('age', 0)},
-                        '{row.get('gender', 'Unknown')}',
-                        '{row.get('symptoms', 'Unknown')}',
-                        NULL,
-                        '{row.get('outcome', 'Activo')}',
-                        {1 if row.get('vaccinated', False) else 0},
-                        current_timestamp()
-                    )
-                    """
-                    databricks_service.execute_query(query)
+                logger.info(f"DataFrame creado con {len(df)} filas y {len(df.columns)} columnas")
+                logger.info(f"Columnas encontradas: {list(df.columns)}")
+                
+                # Insertar registros en Delta Lake (en lotes para mejor performance)
+                batch_size = 1000
+                total_inserted = 0
+                
+                for i in range(0, len(df), batch_size):
+                    batch = df.iloc[i:i+batch_size]
+                    
+                    for _, row in batch.iterrows():
+                        # Mapear columnas del archivo a las columnas de la tabla
+                        # Ajustar según las columnas reales del archivo
+                        try:
+                            query = f"""
+                            INSERT INTO {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+                            (case_id, date, country, region, age, gender, symptoms, severity, outcome, vaccinated, processed_at)
+                            VALUES (
+                                '{row.get('case_id', row.get('id', f'CASE-{uuid.uuid4().hex[:8].upper()}'))}',
+                                '{row.get('date', row.get('fecha', datetime.now().strftime('%Y-%m-%d')))}',
+                                '{row.get('country', row.get('pais', 'Ecuador'))}',
+                                '{row.get('region', row.get('provincia', row.get('ciudad', 'Unknown')))}',
+                                {row.get('age', row.get('edad', 0))},
+                                '{row.get('gender', row.get('sexo', row.get('genero', 'Unknown')))}',
+                                '{str(row.get('symptoms', row.get('sintomas', 'Unknown'))).replace("'", "''")}',
+                                NULL,
+                                '{row.get('outcome', row.get('estado', 'Activo'))}',
+                                {1 if row.get('vaccinated', row.get('vacunado', False)) else 0},
+                                current_timestamp()
+                            )
+                            """
+                            databricks_service.execute_query(query)
+                            total_inserted += 1
+                        except Exception as e:
+                            logger.warning(f"Error insertando fila: {str(e)[:100]}")
+                            continue
+                    
+                    logger.info(f"Insertados {total_inserted}/{len(df)} registros...")
                 
                 databricks_service.disconnect()
-                logger.info(f"✅ Datos guardados en Delta Lake")
+                logger.info(f"✅ {total_inserted} registros guardados en Delta Lake")
+                
             except Exception as e:
                 logger.error(f"Error guardando en Delta Lake: {str(e)}")
                 databricks_service.disconnect()
+        else:
+            logger.warning("⚠️ Databricks no está conectado. Datos no guardados en Delta Lake.")
         
         # Guardar información en la "base de datos"
         file_info = {
@@ -156,7 +237,7 @@ async def upload_covid_data(file: UploadFile = File(...)):
             "uploaded_at": datetime.now()
         }
 
-        # DESPUÉS de guardar el archivo exitosamente:
+        # Log de monitoreo
         monitoring_service.log_event(
             process="Ingesta",
             level=LogLevel.SUCCESS,
@@ -170,7 +251,7 @@ async def upload_covid_data(file: UploadFile = File(...)):
         )
         uploaded_files_db.append(file_info)
         
-        # AGREGAR: Log de auditoría
+        # Log de auditoría
         log_ingestion_status(ingestion_id, "SUCCESS")
         
         return IngestionResponse(

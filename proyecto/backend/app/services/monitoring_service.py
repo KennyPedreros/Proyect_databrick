@@ -52,48 +52,48 @@ class MonitoringService:
         message: str,
         data: Optional[Dict] = None,
         user: Optional[str] = None
-) -> Dict:
-    """Registra un evento en el sistema"""
-    
-   event = {
-        "timestamp": datetime.now().isoformat(),
-        "process": process,
-        "level": level.value,
-        "message": message,
-        "data": data or {},
-        "user": user,
-        "event_id": self._generate_event_id(),
-    }
-    
-    self.events_buffer.append(event)
-    
-    # Log local también
-    log_method = getattr(logger, level.value.lower(), logger.info)
-    log_method(f"[{process}] {message}")
-    
-    # AGREGAR: Guardar en Delta Lake inmediatamente
-    if databricks_service.connect():
-        try:
-            query = f"""
-            INSERT INTO {databricks_service.catalog}.{databricks_service.schema}.audit_logs
-            (log_id, timestamp, process, level, message, user_id, metadata)
-            VALUES (
-                '{event['event_id']}',
-                '{event['timestamp']}',
-                '{process}',
-                '{level.value}',
-                '{message.replace("'", "''")}',
-                '{user or "system"}',
-                '{json.dumps(data or {})}'
-            )
-            """
-            databricks_service.execute_query(query)
-            databricks_service.disconnect()
-        except Exception as e:
-            logger.error(f"Error guardando log en Delta Lake: {str(e)}")
-            databricks_service.disconnect()
-    
-    return event
+    ) -> Dict:
+        """Registra un evento en el sistema"""
+        
+        event = {
+            "timestamp": datetime.now().isoformat(),
+            "process": process,
+            "level": level.value,
+            "message": message,
+            "data": data or {},
+            "user": user,
+            "event_id": self._generate_event_id(),
+        }
+        
+        self.events_buffer.append(event)
+        
+        # Log local también
+        log_method = getattr(logger, level.value.lower(), logger.info)
+        log_method(f"[{process}] {message}")
+        
+        # AGREGAR: Guardar en Delta Lake inmediatamente
+        if databricks_service.connect():
+            try:
+                query = f"""
+                INSERT INTO {databricks_service.catalog}.{databricks_service.schema}.audit_logs
+                (log_id, timestamp, process, level, message, user_id, metadata)
+                VALUES (
+                    '{event['event_id']}',
+                    '{event['timestamp']}',
+                    '{process}',
+                    '{level.value}',
+                    '{message.replace("'", "''")}',
+                    '{user or "system"}',
+                    '{json.dumps(data or {})}'
+                )
+                """
+                databricks_service.execute_query(query)
+                databricks_service.disconnect()
+            except Exception as e:
+                logger.error(f"Error guardando log en Delta Lake: {str(e)}")
+                databricks_service.disconnect()
+        
+        return event
     
     def _generate_event_id(self) -> str:
         """Genera un ID único para el evento"""
@@ -273,7 +273,6 @@ class MonitoringService:
     
     def _check_api_health(self) -> Dict:
         """Verifica salud de la API"""
-        # Esto se completa cuando integres con el framework web
         return {
             "status": "healthy",
             "uptime": "99.9%",
@@ -553,6 +552,7 @@ class MonitoringService:
 monitoring_service = MonitoringService()
 
 def init_audit_table():
+    """Inicializa la tabla de auditoría"""
     if databricks_service.connect():
         try:
             query = f"""
