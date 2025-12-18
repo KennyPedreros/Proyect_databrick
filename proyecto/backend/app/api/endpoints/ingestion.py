@@ -108,7 +108,6 @@ def read_file_universal(file_content: bytes, filename: str) -> Tuple[pd.DataFram
                 io.BytesIO(file_content),
                 encoding=encoding,
                 delimiter=delimiter,
-                low_memory=False,
                 na_values=['', 'NULL', 'null', 'NA', 'N/A', 'nan', 'NaN'],
                 keep_default_na=True,
                 skip_blank_lines=True,

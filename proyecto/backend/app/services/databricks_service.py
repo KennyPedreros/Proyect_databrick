@@ -41,21 +41,21 @@ class DatabricksService:
     
     def disconnect(self):
         """Cierra la conexión"""
-        if self.connection:
+        if self.connect:
             try:
-                self.connection.close()
+                self.connect.close()
                 logger.info("Conexión cerrada")
             except Exception as e:
                 logger.error(f"Error cerrando conexión: {str(e)}")
     
     def execute_query(self, query: str):
         """Ejecuta una consulta SQL y retorna resultados"""
-        if not self.connection:
+        if not self.connect:
             if not self.connect():
                 return []
         
         try:
-            cursor = self.connection.cursor()
+            cursor = self.connect.cursor()
             cursor.execute(query)
             
             if cursor.description:
