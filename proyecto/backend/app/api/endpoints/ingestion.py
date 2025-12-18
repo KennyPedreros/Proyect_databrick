@@ -12,7 +12,7 @@ import logging
 import chardet
 
 router = APIRouter(prefix="/api/ingest", tags=["Módulo 1: Ingesta de Datos"])
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 uploaded_files_db = []
 
