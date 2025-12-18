@@ -8,47 +8,52 @@ logger = logging.getLogger(__name__)
 
 @router.get("/metrics")
 async def get_dashboard_metrics():
-    """Métricas principales - DATOS REALES de Databricks"""
+    """Métricas principales"""
     try:
-        if not databricks_service.connect():
-            raise HTTPException(status_code=500, detail="Error conectando a Databricks")
-        
-        query = f"""
-        SELECT 
-            COUNT(*) as total_cases,
-            SUM(CASE WHEN outcome = 'Activo' THEN 1 ELSE 0 END) as active_cases,
-            SUM(CASE WHEN outcome = 'Recuperado' THEN 1 ELSE 0 END) as recovered,
-            SUM(CASE WHEN outcome = 'Fallecido' THEN 1 ELSE 0 END) as deaths
-        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
-        """
-        
-        result = databricks_service.execute_query(query)
-        databricks_service.disconnect()
-        
-        if result and result[0].get("total_cases", 0) > 0:
-            data = result[0]
+        # ✅ Verificar configuración primero
+        if not databricks_service.is_configured():
             return {
-                "total_cases": data.get("total_cases", 0),
-                "active_cases": data.get("active_cases", 0),
-                "recovered": data.get("recovered", 0),
-                "deaths": data.get("deaths", 0),
-                "last_updated": datetime.now().isoformat(),
-                "data_source": "databricks_real"
+                "total_cases": 0,
+                "active_cases": 0,
+                "recovered": 0,
+                "deaths": 0,
+                "message": "⚠️ Databricks no configurado"
             }
         
+        # ✅ Conectar
+        databricks_service.ensure_connected()
+        
+        # ✅ Obtener el nombre real de la tabla subida
+        # Opción 1: Buscar todas las tablas
+        query = f"""
+        SHOW TABLES IN `{databricks_service.catalog}`.`{databricks_service.schema}`
+        """
+        tables = databricks_service.execute_query(query).fetchall()
+        
+        if not tables:
+            return {
+                "total_cases": 0,
+                "message": "⚠️ No hay tablas. Sube archivos primero."
+            }
+        
+        # Usar la primera tabla (o buscar por nombre específico)
+        table_name = tables[0]['tableName']
+        
+        query = f"""
+        SELECT COUNT(*) as total_cases
+        FROM `{databricks_service.catalog}`.`{databricks_service.schema}`.`{table_name}`
+        """
+        
+        result = databricks_service.execute_query(query).fetchone()
+        
         return {
-            "total_cases": 0,
-            "active_cases": 0,
-            "recovered": 0,
-            "deaths": 0,
-            "last_updated": datetime.now().isoformat(),
-            "data_source": "empty",
-            "message": "⚠️ No hay datos. Carga archivos primero."
+            "total_cases": result['total_cases'],
+            "data_source": "databricks_real",
+            "table_used": table_name
         }
         
     except Exception as e:
-        logger.error(f"Error obteniendo métricas: {str(e)}")
-        databricks_service.disconnect()
+        logger.error(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/timeseries")

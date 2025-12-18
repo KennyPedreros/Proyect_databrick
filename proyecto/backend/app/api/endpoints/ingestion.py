@@ -220,8 +220,9 @@ async def upload_covid_data(file: UploadFile = File(...)):
         logger.info(f"✅ {records_count:,} registros")
         logger.info(f"📋 Columnas: {metadata['original_columns']}")
         table_name = None 
+        
         # GUARDAR EN DATABRICKS
-        if databricks_service.host and databricks_service.token:
+        if databricks_service.is_configured():
             logger.info("💾 Guardando en Databricks...")
             start_time = datetime.now()
             
@@ -245,12 +246,13 @@ async def upload_covid_data(file: UploadFile = File(...)):
                 ingestion_id=ingestion_id
             )
             
-            # 4. Insertar datos
+            # 4. Insertar datos con metadata
+            # Batch size optimizado: 5000 filas por query para mejor rendimiento
             result = databricks_service.insert_dataframe(
                 df=df,
                 table_name=table_name,
-                ingestion_id=ingestion_id,
-                batch_size=1000
+                ingestion_id=ingestion_id,  # ✅ Ahora sí incluir metadata
+                batch_size=5000  # ✅ Lotes más grandes = más rápido
             )
             
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -266,7 +268,8 @@ async def upload_covid_data(file: UploadFile = File(...)):
                     "table": table_name,
                     "file": file.filename,
                     "records": records_count,
-                    "columns": metadata["original_columns"]
+                    "columns": metadata["original_columns"],
+                    "ingestion_id": ingestion_id  # ✅ Guardar en audit log
                 }
             )
         else:
@@ -276,7 +279,7 @@ async def upload_covid_data(file: UploadFile = File(...)):
         file_info = {
             "ingestion_id": ingestion_id,
             "filename": file.filename,
-            "table_name": table_name if databricks_service.host else None,
+            "table_name": table_name if databricks_service.is_configured() else None,
             "size_bytes": file_size,
             "records_count": records_count,
             "uploaded_at": datetime.now(),
@@ -292,7 +295,7 @@ async def upload_covid_data(file: UploadFile = File(...)):
             message=f"✅ {file.filename} ({records_count:,} registros)",
             data={
                 "ingestion_id": ingestion_id,
-                "table": table_name if databricks_service.host else "N/A",
+                "table": table_name if databricks_service.is_configured() else "N/A",
                 "records": records_count,
                 "columns": metadata["original_columns"]
             }
