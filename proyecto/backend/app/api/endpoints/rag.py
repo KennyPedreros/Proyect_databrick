@@ -8,138 +8,279 @@ import logging
 router = APIRouter(prefix="/api/rag", tags=["RAG: Consultas Inteligentes"])
 logger = logging.getLogger(__name__)
 
-# Historial de consultas en memoria
 QUERY_HISTORY = []
 
+def query_databricks_stats() -> dict:
+    """Obtiene estadísticas REALES desde Databricks"""
+    try:
+        if not databricks_service.connect():
+            return None
+        
+        query = f"""
+        SELECT 
+            COUNT(*) as total_cases,
+            COUNT(DISTINCT region) as total_regions,
+            ROUND(AVG(CASE WHEN age > 0 AND age < 120 THEN age ELSE NULL END), 1) as avg_age,
+            SUM(CASE WHEN outcome = 'Fallecido' THEN 1 ELSE 0 END) as total_deaths,
+            SUM(CASE WHEN outcome = 'Activo' THEN 1 ELSE 0 END) as active_cases,
+            SUM(CASE WHEN outcome = 'Recuperado' THEN 1 ELSE 0 END) as recovered,
+            SUM(CASE WHEN vaccinated = true THEN 1 ELSE 0 END) as vaccinated
+        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+        """
+        
+        result = databricks_service.execute_query(query)
+        databricks_service.disconnect()
+        
+        if result and len(result) > 0:
+            return result[0]
+        
+        return None
+    
+    except Exception as e:
+        logger.error(f"Error obteniendo stats: {str(e)}")
+        databricks_service.disconnect()
+        return None
 
-def generate_rag_response(question: str) -> dict:
-    """
-    Genera respuesta usando RAG (Retrieval-Augmented Generation)
-    
-    En producción, esto:
-    1. Buscaría en ChromaDB (vector database)
-    2. Consultaría Delta Lake para datos actuales
-    3. Usaría LangChain + OpenAI para generar respuesta
-    
-    Por ahora, simulamos respuestas basadas en palabras clave
-    """
+def generate_rag_response_real(question: str) -> dict:
+    """Genera respuesta usando datos REALES de Databricks"""
     question_lower = question.lower()
     
-    # Simulación de búsqueda en vector DB
+    stats = query_databricks_stats()
+    
+    if not stats:
+        return {
+            "answer": "⚠️ **No hay datos disponibles**\n\nPor favor, carga archivos usando el módulo de ingesta primero.",
+            "sources": ["Sistema"],
+            "confidence": 0.0
+        }
+    
+    total_cases = stats.get("total_cases", 0)
+    total_deaths = stats.get("total_deaths", 0)
+    active_cases = stats.get("active_cases", 0)
+    recovered = stats.get("recovered", 0)
+    vaccinated = stats.get("vaccinated", 0)
+    avg_age = stats.get("avg_age", 0) or 0
+    
+    mortality_rate = round((total_deaths / total_cases * 100), 2) if total_cases > 0 else 0
+    vaccination_rate = round((vaccinated / total_cases * 100), 2) if total_cases > 0 else 0
+    recovery_rate = round((recovered / total_cases * 100), 2) if total_cases > 0 else 0
+    
     sources = [
-        "Delta Lake: covid_processed table",
-        "ChromaDB: Historical COVID data embeddings"
+        f"Delta Lake: {databricks_service.catalog}.{databricks_service.schema}.covid_processed",
+        f"Última actualización: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     ]
     
-    # Respuestas basadas en palabras clave
-    if "cuántos casos" in question_lower or "total" in question_lower:
-        answer = """Según los datos más recientes en Delta Lake:
+    # ==================== RESPUESTAS BASADAS EN DATOS REALES ====================
+    
+    if "cuántos casos" in question_lower or "total de casos" in question_lower or "total" in question_lower:
+        answer = f"""**📊 Estadísticas Generales (Datos Reales)**
 
-**Total de Casos**: 15,234
-**Casos Activos**: 1,845
-**Recuperados**: 12,456
-**Fallecidos**: 933
+**Resumen de Casos:**
+• Total de Casos: **{total_cases:,}**
+• Casos Activos: **{active_cases:,}** ({round(active_cases/total_cases*100, 1) if total_cases > 0 else 0}%)
+• Recuperados: **{recovered:,}** ({recovery_rate}%)
+• Fallecidos: **{total_deaths:,}** ({mortality_rate}%)
 
-Los datos muestran una tendencia a la baja en los últimos meses, con una reducción del 12% en casos nuevos comparado con el mes anterior."""
-        sources.append("Query: SELECT COUNT(*) FROM covid_processed")
-        
-    elif "tendencia" in question_lower or "evolución" in question_lower:
-        answer = """La tendencia de COVID-19 en los últimos meses muestra:
+**Vacunación:**
+• Total Vacunados: **{vaccinated:,}** ({vaccination_rate}%)
 
-📉 **Casos Nuevos**: Reducción del 12% mensual
-📈 **Vacunación**: Incremento constante (+15% mensual)
-🏥 **Hospitalización**: Disminución del 8%
+**Demografía:**
+• Edad Promedio: **{avg_age:.1f} años**
 
-Las proyecciones para el próximo mes indican una continuación de esta tendencia positiva."""
-        sources.append("Time series analysis from Delta Lake")
+_Datos extraídos directamente de Delta Lake_"""
         
     elif "vacunación" in question_lower or "vacunad" in question_lower:
-        answer = """Estadísticas de Vacunación:
+        answer = f"""**💉 Estadísticas de Vacunación (Datos Reales)**
 
-💉 **Total Vacunados**: 8,500 personas
-📊 **Tasa de Vacunación**: 55.8% de la población registrada
-📈 **Crecimiento**: +15% este mes
+• **Personas Vacunadas**: {vaccinated:,}
+• **Personas No Vacunadas**: {total_cases - vaccinated:,}
+• **Tasa de Vacunación**: {vaccination_rate}%
 
-El programa de vacunación ha mostrado excelentes resultados con una cobertura en aumento constante."""
-        sources.append("Vaccination data from covid_processed")
-        
-    elif "provincia" in question_lower or "región" in question_lower or "geográf" in question_lower:
-        answer = """Distribución Geográfica de Casos:
+**Análisis:**
+De los {total_cases:,} casos registrados, {vaccinated:,} personas están vacunadas.
 
-**Top 5 Provincias con más casos:**
-1. Pichincha: 4,523 casos
-2. Guayas: 3,892 casos
-3. Azuay: 2,156 casos
-4. Manabí: 1,789 casos
-5. Tungurahua: 1,234 casos
-
-Las zonas urbanas continúan siendo las más afectadas."""
-        sources.append("Geographic aggregation query")
+_Fuente: Archivos cargados en el sistema_"""
         
     elif "mortalidad" in question_lower or "muerte" in question_lower or "fallec" in question_lower:
-        answer = """Estadísticas de Mortalidad:
+        answer = f"""**📊 Estadísticas de Mortalidad (Datos Reales)**
 
-📊 **Tasa de Mortalidad**: 6.12%
-📉 **Tendencia**: -3% vs mes anterior
-👥 **Total Fallecidos**: 933 personas
+• **Total Fallecidos**: {total_deaths:,} personas
+• **Tasa de Mortalidad**: {mortality_rate}%
+• **Casos Activos**: {active_cases:,}
+• **Recuperados**: {recovered:,}
 
-La tasa de mortalidad ha disminuido gracias a mejores tratamientos y mayor cobertura de vacunación."""
-        sources.append("Mortality analysis from covid_processed")
+**Cálculo:**
+Tasa de Mortalidad = (Fallecidos / Total Casos) × 100
+= ({total_deaths:,} / {total_cases:,}) × 100 = {mortality_rate}%
+
+_Datos actualizados desde Delta Lake_"""
         
-    elif "severidad" in question_lower or "gravedad" in question_lower:
-        answer = """Distribución por Severidad:
-
-🟢 **Leve**: 40% (400 casos)
-🟡 **Moderado**: 30% (300 casos)
-🟠 **Grave**: 20% (200 casos)
-🔴 **Crítico**: 10% (100 casos)
-
-La mayoría de casos se clasifican como leves o moderados."""
-        sources.append("Classification data from ML model")
+    elif "región" in question_lower or "provincia" in question_lower or "geográf" in question_lower:
+        if not databricks_service.connect():
+            return {"answer": "Error conectando a base de datos", "sources": [], "confidence": 0}
         
+        query = f"""
+        SELECT 
+            region,
+            COUNT(*) as total_cases,
+            SUM(CASE WHEN outcome = 'Fallecido' THEN 1 ELSE 0 END) as deaths
+        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+        WHERE region IS NOT NULL AND region != 'Unknown'
+        GROUP BY region
+        ORDER BY total_cases DESC
+        LIMIT 10
+        """
+        
+        regions = databricks_service.execute_query(query)
+        databricks_service.disconnect()
+        
+        if regions:
+            region_text = "\n".join([
+                f"{i+1}. **{r['region']}**: {r['total_cases']:,} casos ({r['deaths']:,} fallecidos)"
+                for i, r in enumerate(regions)
+            ])
+            
+            answer = f"""**📍 Distribución Geográfica (Top 10 Regiones)**
+
+{region_text}
+
+**Total de Regiones**: {stats.get('total_regions', len(regions))}
+
+_Datos extraídos de los archivos cargados_"""
+        else:
+            answer = "⚠️ No hay datos geográficos disponibles en los archivos cargados."
+        
+    elif "severidad" in question_lower or "gravedad" in question_lower or "clasificación" in question_lower:
+        if not databricks_service.connect():
+            return {"answer": "Error conectando a base de datos", "sources": [], "confidence": 0}
+        
+        query = f"""
+        SELECT 
+            COALESCE(severity, 'Sin Clasificar') as severity,
+            COUNT(*) as count,
+            ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed), 1) as percentage
+        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+        GROUP BY severity
+        ORDER BY 
+            CASE COALESCE(severity, 'Sin Clasificar')
+                WHEN 'Crítico' THEN 1
+                WHEN 'Grave' THEN 2
+                WHEN 'Moderado' THEN 3
+                WHEN 'Leve' THEN 4
+                ELSE 5
+            END
+        """
+        
+        severities = databricks_service.execute_query(query)
+        databricks_service.disconnect()
+        
+        if severities:
+            emoji_map = {
+                'Crítico': '🔴',
+                'Grave': '🟠',
+                'Moderado': '🟡',
+                'Leve': '🟢',
+                'Sin Clasificar': '⚪'
+            }
+            
+            sev_text = "\n".join([
+                f"{emoji_map.get(s['severity'], '⚪')} **{s['severity']}**: {s['count']:,} casos ({s['percentage']}%)"
+                for s in severities
+            ])
+            
+            total_classified = sum(s['count'] for s in severities if s['severity'] != 'Sin Clasificar')
+            
+            answer = f"""**🏥 Distribución por Severidad**
+
+{sev_text}
+
+**Total Clasificado**: {total_classified:,} casos
+
+💡 _Tip: Si hay casos sin clasificar, puedes ejecutar la clasificación automática en el Módulo 4_"""
+        else:
+            answer = "⚠️ No hay datos de clasificación. Ejecuta primero el módulo de clasificación automática."
+    
+    elif "edad" in question_lower or "promedio" in question_lower:
+        if not databricks_service.connect():
+            return {"answer": "Error conectando a base de datos", "sources": [], "confidence": 0}
+        
+        query = f"""
+        SELECT 
+            CASE 
+                WHEN age < 18 THEN '0-17'
+                WHEN age < 30 THEN '18-29'
+                WHEN age < 45 THEN '30-44'
+                WHEN age < 60 THEN '45-59'
+                WHEN age < 75 THEN '60-74'
+                ELSE '75+'
+            END as age_group,
+            COUNT(*) as count,
+            ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed WHERE age > 0 AND age < 120), 1) as percentage
+        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+        WHERE age > 0 AND age < 120
+        GROUP BY age_group
+        ORDER BY MIN(age)
+        """
+        
+        age_groups = databricks_service.execute_query(query)
+        databricks_service.disconnect()
+        
+        if age_groups:
+            age_text = "\n".join([
+                f"• **{g['age_group']} años**: {g['count']:,} casos ({g['percentage']}%)"
+                for g in age_groups
+            ])
+            
+            answer = f"""**👥 Distribución por Edad**
+
+{age_text}
+
+**Edad Promedio**: {avg_age:.1f} años
+
+_Análisis basado en {total_cases:,} casos registrados_"""
+        else:
+            answer = "No hay datos de edad disponibles."
+    
     else:
-        # Respuesta genérica
-        answer = f"""He analizado tu pregunta: "{question}"
+        answer = f"""He analizado tu pregunta: **"{question}"**
 
-Basándome en los datos disponibles en Delta Lake y ChromaDB, puedo ofrecerte información sobre:
+**📊 Resumen de Datos Disponibles:**
 
-• Estadísticas generales de casos COVID-19
-• Tendencias temporales y proyecciones
-• Distribución geográfica por provincias
-• Datos de vacunación
-• Tasas de mortalidad
-• Clasificación por severidad
+• Total de Casos: **{total_cases:,}**
+• Casos Activos: **{active_cases:,}**
+• Recuperados: **{recovered:,}**
+• Fallecidos: **{total_deaths:,}**
+• Tasa de Mortalidad: **{mortality_rate}%**
+• Tasa de Vacunación: **{vaccination_rate}%**
+• Edad Promedio: **{avg_age:.1f} años**
 
-¿Podrías ser más específico sobre qué aspecto te interesa conocer?"""
-        sources = [
-            "Delta Lake: covid_processed table (15,234 registros)",
-            "ChromaDB: Vector embeddings for semantic search"
-        ]
+**💡 Puedo responder preguntas sobre:**
+✅ Estadísticas generales y específicas
+✅ Distribución geográfica por regiones
+✅ Datos de vacunación
+✅ Tasas de mortalidad y recuperación
+✅ Clasificación por severidad
+✅ Análisis por grupos de edad
+
+¿Qué información específica necesitas?"""
     
     return {
         "answer": answer,
         "sources": sources,
-        "confidence": 0.85
+        "confidence": 0.95
     }
-
 
 @router.post("/query", response_model=RAGQueryResponse)
 async def query_covid_data(request: RAGQueryRequest):
     """
-    Sistema RAG: Consultas inteligentes sobre datos COVID-19
-    
-    Usa:
-    - ChromaDB para búsqueda semántica
-    - Delta Lake para datos actuales
-    - LangChain + OpenAI para generación de respuestas
+    Sistema RAG: Consultas sobre datos COVID-19 REALES
+    Los datos provienen directamente de Databricks Delta Lake
     """
     try:
         logger.info(f"Nueva consulta RAG: {request.question}")
         
-        # Generar respuesta
-        response_data = generate_rag_response(request.question)
+        response_data = generate_rag_response_real(request.question)
         
-        # Crear respuesta
         query_id = str(uuid.uuid4())
         response = RAGQueryResponse(
             answer=response_data["answer"],
@@ -149,7 +290,6 @@ async def query_covid_data(request: RAGQueryRequest):
             timestamp=datetime.now()
         )
         
-        # Guardar en historial
         QUERY_HISTORY.insert(0, {
             "query_id": query_id,
             "question": request.question,
@@ -158,107 +298,63 @@ async def query_covid_data(request: RAGQueryRequest):
             "helpful": None
         })
         
-        # Mantener solo últimas 100 consultas
         if len(QUERY_HISTORY) > 100:
             QUERY_HISTORY.pop()
         
-        logger.info(f"Respuesta RAG generada para query: {query_id}")
+        logger.info(f"Respuesta generada: {query_id}")
         
         return response
         
     except Exception as e:
-        logger.error(f"Error en consulta RAG: {str(e)}")
+        logger.error(f"Error en RAG: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/history")
 async def get_query_history(limit: int = 20):
-    """
-    Obtener historial de consultas RAG
-    """
-    try:
-        history = QUERY_HISTORY[:limit]
-        
-        return {
-            "total": len(history),
-            "queries": history
-        }
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo historial: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+    """Obtener historial de consultas RAG"""
+    return {
+        "total": len(QUERY_HISTORY),
+        "queries": QUERY_HISTORY[:limit]
+    }
 
 @router.post("/feedback")
 async def submit_feedback(query_id: str, helpful: bool):
-    """
-    Enviar feedback sobre una respuesta RAG
-    """
-    try:
-        # Buscar query en historial
-        for query in QUERY_HISTORY:
-            if query["query_id"] == query_id:
-                query["helpful"] = helpful
-                
-                logger.info(f"Feedback recibido para query {query_id}: {'helpful' if helpful else 'not helpful'}")
-                
-                return {
-                    "success": True,
-                    "message": "Feedback registrado",
-                    "query_id": query_id
-                }
-        
-        raise HTTPException(status_code=404, detail="Query no encontrada")
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error guardando feedback: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+    """Enviar feedback sobre una respuesta"""
+    for query in QUERY_HISTORY:
+        if query["query_id"] == query_id:
+            query["helpful"] = helpful
+            logger.info(f"Feedback: {query_id} - {'✓' if helpful else '✗'}")
+            return {
+                "success": True,
+                "message": "Feedback registrado",
+                "query_id": query_id
+            }
+    
+    raise HTTPException(status_code=404, detail="Query no encontrada")
 
 @router.get("/stats")
 async def get_rag_stats():
-    """
-    Obtener estadísticas del sistema RAG
-    """
-    try:
-        total_queries = len(QUERY_HISTORY)
-        
-        # Calcular feedback
-        helpful_count = sum(1 for q in QUERY_HISTORY if q.get("helpful") == True)
-        not_helpful_count = sum(1 for q in QUERY_HISTORY if q.get("helpful") == False)
-        no_feedback = total_queries - helpful_count - not_helpful_count
-        
-        return {
-            "total_queries": total_queries,
-            "feedback": {
-                "helpful": helpful_count,
-                "not_helpful": not_helpful_count,
-                "no_feedback": no_feedback
-            },
-            "satisfaction_rate": round((helpful_count / max(helpful_count + not_helpful_count, 1)) * 100, 2),
-            "average_confidence": 0.85  # Promedio de confianza
-        }
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo estadísticas: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+    """Estadísticas del sistema RAG"""
+    total_queries = len(QUERY_HISTORY)
+    helpful_count = sum(1 for q in QUERY_HISTORY if q.get("helpful") == True)
+    not_helpful_count = sum(1 for q in QUERY_HISTORY if q.get("helpful") == False)
+    
+    return {
+        "total_queries": total_queries,
+        "feedback": {
+            "helpful": helpful_count,
+            "not_helpful": not_helpful_count,
+            "no_feedback": total_queries - helpful_count - not_helpful_count
+        },
+        "satisfaction_rate": round((helpful_count / max(helpful_count + not_helpful_count, 1)) * 100, 2),
+        "average_confidence": 0.95
+    }
 
 @router.delete("/history")
 async def clear_history():
-    """
-    Limpiar historial de consultas
-    """
-    try:
-        QUERY_HISTORY.clear()
-        
-        return {
-            "success": True,
-            "message": "Historial limpiado"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error limpiando historial: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Limpiar historial de consultas"""
+    QUERY_HISTORY.clear()
+    return {
+        "success": True,
+        "message": "Historial limpiado"
+    }

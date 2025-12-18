@@ -9,6 +9,7 @@ from app.services.databricks_service import databricks_service
 
 logger = logging.getLogger(__name__)
 
+
 class LogLevel(str, Enum):
     """Niveles de log del sistema"""
     INFO = "INFO"
@@ -45,6 +46,10 @@ class MonitoringService:
             "query_timeout_seconds": 30,
         }
     
+    # ============================================
+    # LOGGING
+    # ============================================
+    
     def log_event(
         self,
         process: str,
@@ -71,27 +76,9 @@ class MonitoringService:
         log_method = getattr(logger, level.value.lower(), logger.info)
         log_method(f"[{process}] {message}")
         
-        # AGREGAR: Guardar en Delta Lake inmediatamente
-        if databricks_service.connect():
-            try:
-                query = f"""
-                INSERT INTO {databricks_service.catalog}.{databricks_service.schema}.audit_logs
-                (log_id, timestamp, process, level, message, user_id, metadata)
-                VALUES (
-                    '{event['event_id']}',
-                    '{event['timestamp']}',
-                    '{process}',
-                    '{level.value}',
-                    '{message.replace("'", "''")}',
-                    '{user or "system"}',
-                    '{json.dumps(data or {})}'
-                )
-                """
-                databricks_service.execute_query(query)
-                databricks_service.disconnect()
-            except Exception as e:
-                logger.error(f"Error guardando log en Delta Lake: {str(e)}")
-                databricks_service.disconnect()
+        # Si es evento crítico, enviar a Databricks inmediatamente
+        if level in [LogLevel.ERROR, LogLevel.CRITICAL]:
+            self._save_event_to_databricks(event)
         
         return event
     
@@ -106,15 +93,7 @@ class MonitoringService:
             return 0
         
         events_to_save = self.events_buffer.copy()
-        self.events_buffer = []
-        
-        try:
-            for event in events_to_save:
-                self._save_event_to_databricks(event)
-            
-            logger.info(f"✅ {len(events_to_save)} eventos guardados en Databricks")
-            return len(events_to_save)
-        
+        self.events_+
         except Exception as e:
             logger.error(f"❌ Error guardando eventos: {str(e)}")
             return 0
@@ -273,6 +252,7 @@ class MonitoringService:
     
     def _check_api_health(self) -> Dict:
         """Verifica salud de la API"""
+        # Esto se completa cuando integres con el framework web
         return {
             "status": "healthy",
             "uptime": "99.9%",
@@ -550,26 +530,3 @@ class MonitoringService:
 
 # Instancia global
 monitoring_service = MonitoringService()
-
-def init_audit_table():
-    """Inicializa la tabla de auditoría"""
-    if databricks_service.connect():
-        try:
-            query = f"""
-            CREATE TABLE IF NOT EXISTS {databricks_service.catalog}.{databricks_service.schema}.audit_logs (
-                log_id STRING,
-                timestamp TIMESTAMP,
-                process STRING,
-                level STRING,
-                message STRING,
-                user_id STRING,
-                metadata STRING
-            )
-            USING DELTA
-            """
-            databricks_service.execute_query(query)
-            databricks_service.disconnect()
-        except:
-            databricks_service.disconnect()
-
-init_audit_table()
