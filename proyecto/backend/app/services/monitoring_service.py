@@ -92,8 +92,20 @@ class MonitoringService:
         if not self.events_buffer:
             return 0
         
-        events_to_save = self.events_buffer.copy()
-        self.events_+
+        try:
+            events_to_save = self.events_buffer.copy()
+            self.events_buffer.clear()
+            
+            saved_count = 0
+            for event in events_to_save:
+                try:
+                    self._save_event_to_databricks(event)
+                    saved_count += 1
+                except Exception as e:
+                    logger.error(f"Error guardando evento: {str(e)}")
+            
+            return saved_count
+            
         except Exception as e:
             logger.error(f"❌ Error guardando eventos: {str(e)}")
             return 0
@@ -105,7 +117,8 @@ class MonitoringService:
                 return
             
             # Convertir data a JSON string para almacenamiento
-            event_data_json = json.dumps(event.get("data", {}))
+            event_data_json = json.dumps(event.get("data", {})).replace("'", "''")
+            message_escaped = event['message'].replace("'", "''")
             
             query = f"""
             INSERT INTO {databricks_service.catalog}.{databricks_service.schema}.audit_logs
@@ -115,7 +128,7 @@ class MonitoringService:
                 '{event['timestamp']}',
                 '{event['process']}',
                 '{event['level']}',
-                '{event['message'].replace("'", "''")}',
+                '{message_escaped}',
                 '{event_data_json}',
                 '{event.get('user', 'system')}'
             )
@@ -159,52 +172,76 @@ class MonitoringService:
     
     def _check_cpu_usage(self) -> Dict:
         """Verifica uso de CPU"""
-        cpu_percent = psutil.cpu_percent(interval=1)
-        
-        status = "healthy"
-        if cpu_percent > self.thresholds["cpu_usage"]:
-            status = "warning"
-        
-        return {
-            "value": cpu_percent,
-            "unit": "%",
-            "threshold": self.thresholds["cpu_usage"],
-            "status": status
-        }
+        try:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            
+            status = "healthy"
+            if cpu_percent > self.thresholds["cpu_usage"]:
+                status = "warning"
+            
+            return {
+                "value": cpu_percent,
+                "unit": "%",
+                "threshold": self.thresholds["cpu_usage"],
+                "status": status
+            }
+        except Exception as e:
+            return {
+                "value": 0,
+                "unit": "%",
+                "status": "error",
+                "error": str(e)
+            }
     
     def _check_memory_usage(self) -> Dict:
         """Verifica uso de memoria"""
-        memory = psutil.virtual_memory()
-        memory_percent = memory.percent
-        
-        status = "healthy"
-        if memory_percent > self.thresholds["memory_usage"]:
-            status = "warning"
-        
-        return {
-            "value": memory_percent,
-            "unit": "%",
-            "available": f"{memory.available / (1024**3):.2f} GB",
-            "threshold": self.thresholds["memory_usage"],
-            "status": status
-        }
+        try:
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            
+            status = "healthy"
+            if memory_percent > self.thresholds["memory_usage"]:
+                status = "warning"
+            
+            return {
+                "value": memory_percent,
+                "unit": "%",
+                "available": f"{memory.available / (1024**3):.2f} GB",
+                "threshold": self.thresholds["memory_usage"],
+                "status": status
+            }
+        except Exception as e:
+            return {
+                "value": 0,
+                "unit": "%",
+                "status": "error",
+                "error": str(e)
+            }
     
     def _check_disk_usage(self) -> Dict:
         """Verifica uso de disco"""
-        disk = psutil.disk_usage("/")
-        disk_percent = disk.percent
-        
-        status = "healthy"
-        if disk_percent > self.thresholds["disk_usage"]:
-            status = "warning"
-        
-        return {
-            "value": disk_percent,
-            "unit": "%",
-            "free": f"{disk.free / (1024**3):.2f} GB",
-            "threshold": self.thresholds["disk_usage"],
-            "status": status
-        }
+        try:
+            disk = psutil.disk_usage("/")
+            disk_percent = disk.percent
+            
+            status = "healthy"
+            if disk_percent > self.thresholds["disk_usage"]:
+                status = "warning"
+            
+            return {
+                "value": disk_percent,
+                "unit": "%",
+                "free": f"{disk.free / (1024**3):.2f} GB",
+                "threshold": self.thresholds["disk_usage"],
+                "status": status
+            }
+        except Exception as e:
+            return {
+                "value": 0,
+                "unit": "%",
+                "status": "error",
+                "error": str(e)
+            }
     
     def _check_databricks_connection(self) -> Dict:
         """Verifica conexión con Databricks"""
@@ -252,7 +289,6 @@ class MonitoringService:
     
     def _check_api_health(self) -> Dict:
         """Verifica salud de la API"""
-        # Esto se completa cuando integres con el framework web
         return {
             "status": "healthy",
             "uptime": "99.9%",
@@ -273,7 +309,7 @@ class MonitoringService:
             result = databricks_service.execute_query(query)
             databricks_service.disconnect()
             
-            if result and result[0]['last_update']:
+            if result and result[0].get('last_update'):
                 last_update = result[0]['last_update']
                 hours_old = (datetime.now() - last_update).total_seconds() / 3600
                 
@@ -364,7 +400,7 @@ class MonitoringService:
                     alert_type="data_stale",
                     level=AlertLevel.HIGH,
                     title="Datos desactualizados",
-                    message=f"Últimos datos con {freshness['hours_old']:.1f} horas de antigüedad"
+                    message=f"Últimos datos con {freshness.get('hours_old', 0):.1f} horas de antigüedad"
                 )
     
     # ============================================
