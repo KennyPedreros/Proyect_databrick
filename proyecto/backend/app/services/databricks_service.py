@@ -6,29 +6,63 @@ import json
 from datetime import datetime
 import uuid
 import re
-import io
+import os
 
 logger = logging.getLogger(__name__)
 
 
 class DatabricksService:
-    """Servicio dinámico para Databricks - carga masiva optimizada"""
+    """Servicio dinámico para Databricks - crea tablas basadas en CSV"""
     
     def __init__(self):
-        self.host = settings.DATABRICKS_HOST
-        self.token = settings.DATABRICKS_TOKEN
-        self.cluster_id = settings.DATABRICKS_CLUSTER_ID
-        self.catalog = settings.DATABRICKS_CATALOG
-        self.schema = settings.DATABRICKS_SCHEMA
+        # Cargar desde settings primero, luego intentar directo desde OS si falla
+        self.host = settings.DATABRICKS_HOST or os.getenv('DATABRICKS_HOST')
+        self.token = settings.DATABRICKS_TOKEN or os.getenv('DATABRICKS_TOKEN')
+        self.cluster_id = settings.DATABRICKS_CLUSTER_ID or os.getenv('DATABRICKS_CLUSTER_ID')
+        self.catalog = settings.DATABRICKS_CATALOG or os.getenv('DATABRICKS_CATALOG', 'covid_catalog')
+        self.schema = settings.DATABRICKS_SCHEMA or os.getenv('DATABRICKS_SCHEMA', 'covid_schema')
         self.connection = None
+        
+        # Log de debug para verificar configuración al inicializar
+        self._log_configuration_status()
+    
+    def _log_configuration_status(self):
+        """Log de estado de configuración (solo para debug)"""
+        if self.is_configured():
+            logger.info(f"✅ Databricks configurado: {self.host[:20]}...")
+        else:
+            logger.error("❌ Databricks NO configurado correctamente")
+            logger.error(f"   Host: {'✓' if self.host else '✗'}")
+            logger.error(f"   Token: {'✓' if self.token else '✗'}")
+            logger.error(f"   Cluster ID: {'✓' if self.cluster_id else '✗'}")
+    
+    def is_configured(self) -> bool:
+        """
+        Verifica si Databricks está configurado
+        DEBE tener las 3 credenciales básicas
+        """
+        has_host = bool(self.host and self.host.strip() and self.host != 'None')
+        has_token = bool(self.token and self.token.strip() and self.token != 'None')
+        has_cluster = bool(self.cluster_id and self.cluster_id.strip() and self.cluster_id != 'None')
+        
+        configured = has_host and has_token and has_cluster
+        
+        if not configured:
+            logger.warning("⚠️ Databricks no configurado completamente:")
+            logger.warning(f"   - Host: {self.host if has_host else 'FALTA'}")
+            logger.warning(f"   - Token: {'Configurado' if has_token else 'FALTA'}")
+            logger.warning(f"   - Cluster ID: {self.cluster_id if has_cluster else 'FALTA'}")
+        
+        return configured
         
     def connect(self):
         """Establece conexión con Databricks SQL Warehouse"""
+        # Verificar configuración ANTES de intentar conectar
+        if not self.is_configured():
+            logger.error("❌ No se puede conectar: Databricks no configurado")
+            return False
+        
         try:
-            if not self.host or not self.token or not self.cluster_id:
-                logger.warning("Databricks credentials not configured")
-                return False
-                
             self.connection = sql.connect(
                 server_hostname=self.host,
                 http_path=f"/sql/1.0/warehouses/{self.cluster_id}",
@@ -36,46 +70,52 @@ class DatabricksService:
             )
             logger.info("✅ Conexión exitosa con Databricks")
             return True
+            
         except Exception as e:
             logger.error(f"❌ Error conectando a Databricks: {str(e)}")
             return False
     
-    def is_configured(self) -> bool:
-        """Verifica si Databricks está configurado"""
-        return bool(self.host and self.token and self.cluster_id)
-
     def disconnect(self):
         """Cierra la conexión"""
         if self.connection:
             try:
                 self.connection.close()
-                logger.info("Conexión cerrada")
+                logger.debug("Conexión cerrada")
             except Exception as e:
                 logger.error(f"Error cerrando conexión: {str(e)}")
-
-    def ensure_connected(self):
-        """Asegura que hay conexión activa"""
-        try:
-            if not self.connection:
-                self.connect()
-                return
-            
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT 1")
-            cursor.close()
-        except:
-            logger.warning("⚠️ Conexión inválida, reconectando...")
-            self.connect()
     
-    def execute_query(self, query: str, params=None):
-        """Ejecuta query con reconexión automática"""
+    def ensure_connected(self):
+        """
+        Asegura que hay conexión activa
+        Si no hay, intenta reconectar
+        """
+        if not self.connection:
+            return self.connect()
+        return True
+    
+    def execute_query(self, query: str):
+        """Ejecuta una consulta SQL y retorna resultados"""
+        if not self.ensure_connected():
+            return []
+        
         try:
-            self.ensure_connected()
             cursor = self.connection.cursor()
-            cursor.execute(query, params or [])
-            return cursor
+            cursor.execute(query)
+            
+            # Obtener resultados
+            if cursor.description:
+                columns = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                results = [dict(zip(columns, row)) for row in rows]
+            else:
+                results = []
+            
+            cursor.close()
+            return results
+            
         except Exception as e:
-            logger.error(f"❌ Error: {e}")
+            logger.error(f"Error ejecutando query: {str(e)}")
+            logger.error(f"Query: {query}")
             raise
     
     def sanitize_column_name(self, column_name: str) -> str:
@@ -88,8 +128,6 @@ class DatabricksService:
         
         if clean and clean[0].isdigit():
             clean = f'col_{clean}'
-        
-        clean = clean[:128]
         
         return clean if clean else 'unnamed_column'
     
@@ -162,8 +200,37 @@ class DatabricksService:
             logger.error(f"Error creando tabla RAW: {str(e)}")
             raise
     
+    def create_processed_table(self):
+        """Crea la tabla para datos procesados"""
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.covid_processed (
+            case_id STRING,
+            date DATE,
+            country STRING,
+            region STRING,
+            age INT,
+            gender STRING,
+            symptoms STRING,
+            severity STRING,
+            outcome STRING,
+            vaccinated BOOLEAN,
+            medical_history STRING,
+            classification_confidence DOUBLE,
+            classified_at TIMESTAMP,
+            processed_at TIMESTAMP
+        )
+        USING DELTA
+        """
+        
+        try:
+            self.execute_query(query)
+            logger.info("✅ Tabla PROCESSED creada/verificada")
+        except Exception as e:
+            logger.error(f"Error creando tabla PROCESSED: {str(e)}")
+            raise
+    
     def create_audit_table(self):
-        """Crea tabla de auditoría"""
+        """Crea tabla para logs de auditoría"""
         query = f"""
         CREATE TABLE IF NOT EXISTS {self.catalog}.{self.schema}.audit_logs (
             event_id STRING,
@@ -184,14 +251,36 @@ class DatabricksService:
             logger.error(f"Error creando tabla AUDIT: {str(e)}")
             raise
     
+    def setup_database(self):
+        """
+        ✅ MÉTODO FALTANTE #1
+        Setup inicial completo de la base de datos
+        """
+        logger.info("🔧 Configurando base de datos...")
+        try:
+            self.create_catalog_and_schema()
+            self.create_raw_table()
+            self.create_processed_table()
+            self.create_audit_table()
+            logger.info("✅ Base de datos configurada exitosamente")
+            return True
+        except Exception as e:
+            logger.error(f"Error en setup de BD: {str(e)}")
+            return False
+    
     def create_dynamic_table_from_df(self, df: pd.DataFrame, table_name: str, 
                                      drop_if_exists: bool = False) -> str:
-        """Crea tabla dinámicamente basada en DataFrame"""
-        self.ensure_connected()
+        """
+        Crea tabla dinámicamente basada en DataFrame
+        
+        Returns:
+            str: Nombre limpio de la tabla creada
+        """
         try:
             clean_table_name = self.sanitize_table_name(table_name)
             full_table_name = f"{self.catalog}.{self.schema}.{clean_table_name}"
             
+            # Eliminar si se solicita
             if drop_if_exists:
                 drop_query = f"DROP TABLE IF EXISTS {full_table_name}"
                 self.execute_query(drop_query)
@@ -203,11 +292,11 @@ class DatabricksService:
                 clean_col = self.sanitize_column_name(col)
                 sample_values = df[col].head(100).tolist()
                 sql_type = self.infer_sql_type(df[col].dtype, sample_values)
-                columns_sql.append(f"`{clean_col}` {sql_type}")
+                columns_sql.append(f"{clean_col} {sql_type}")
             
-            # Agregar columnas de metadata
-            columns_sql.append("`_ingestion_id` STRING")
-            columns_sql.append("`_processed_at` TIMESTAMP")
+            # Metadatos
+            columns_sql.append("_ingestion_id STRING")
+            columns_sql.append("_processed_at TIMESTAMP")
             
             create_query = f"""
             CREATE TABLE IF NOT EXISTS {full_table_name} (
@@ -225,16 +314,6 @@ class DatabricksService:
             logger.error(f"Error creando tabla dinámica: {str(e)}")
             raise
     
-    def get_uploaded_tables(self):
-        """Lista tablas disponibles"""
-        try:
-            self.ensure_connected()
-            query = f"SHOW TABLES IN `{self.catalog}`.`{self.schema}`"
-            cursor = self.execute_query(query)
-            return [row['tableName'] for row in cursor.fetchall()]
-        except:
-            return []
-
     def insert_raw_data(self, table_name: str, filename: str, 
                        df: pd.DataFrame, ingestion_id: str) -> bool:
         """Guarda muestra en tabla RAW"""
@@ -271,108 +350,78 @@ class DatabricksService:
             logger.error(f"Error insertando RAW: {str(e)}")
             return False
     
-    def insert_dataframe(self, df, table_name, ingestion_id=None, batch_size=5000):
+    def insert_dataframe(self, df: pd.DataFrame, table_name: str, 
+                        ingestion_id: str, batch_size: int = 1000) -> dict:
         """
-        ⚡ CARGA MASIVA OPTIMIZADA - INSERT directo con VALUES múltiples
+        Inserta DataFrame completo en tabla
+        """
+        clean_table_name = self.sanitize_table_name(table_name)
+        full_table_name = f"{self.catalog}.{self.schema}.{clean_table_name}"
         
-        Estrategia: Insertar lotes grandes directamente sin tablas temporales
-        """
+        total_records = len(df)
+        success_count = 0
+        error_count = 0
+        
         try:
-            self.ensure_connected()
-            start_time = datetime.now()
+            # Limpiar columnas
+            df_clean = df.copy()
+            df_clean.columns = [self.sanitize_column_name(col) for col in df_clean.columns]
             
-            clean_table_name = self.sanitize_table_name(table_name)
-            full_table = f"`{self.catalog}`.`{self.schema}`.`{clean_table_name}`"
+            # Metadatos
+            df_clean['_ingestion_id'] = ingestion_id
+            df_clean['_processed_at'] = datetime.now()
             
-            # Preparar DataFrame con metadata
-            df_copy = df.copy()
-            if ingestion_id:
-                df_copy['_ingestion_id'] = ingestion_id
-                df_copy['_processed_at'] = datetime.now()
-            
-            # Sanitizar nombres de columnas
-            original_columns = df_copy.columns.tolist()
-            df_copy.columns = [self.sanitize_column_name(col) for col in df_copy.columns]
-            sanitized_columns = df_copy.columns.tolist()
-            
-            # Preparar query base
-            cols_str = ', '.join([f'`{col}`' for col in sanitized_columns])
-            
-            total_rows = len(df_copy)
-            inserted = 0
-            failed = 0
-            
-            logger.info(f"📊 Insertando {total_rows:,} filas en lotes de {batch_size:,}...")
-            
-            # Insertar en lotes
-            for i in range(0, total_rows, batch_size):
+            # Insertar por lotes
+            for i in range(0, len(df_clean), batch_size):
+                batch = df_clean.iloc[i:i+batch_size]
+                
                 try:
-                    batch = df_copy.iloc[i:i + batch_size]
-                    
-                    # Construir VALUES múltiples
                     values_list = []
                     for _, row in batch.iterrows():
                         values = []
-                        for val in row:
+                        for col in batch.columns:
+                            val = row[col]
+                            
                             if pd.isna(val):
                                 values.append('NULL')
-                            elif isinstance(val, str):
-                                # Escapar caracteres especiales
-                                safe_val = str(val).replace("\\", "\\\\").replace("'", "''")
-                                # Limitar longitud para evitar queries muy grandes
-                                if len(safe_val) > 10000:
-                                    safe_val = safe_val[:10000]
-                                values.append(f"'{safe_val}'")
+                            elif isinstance(val, bool):
+                                values.append('TRUE' if val else 'FALSE')
                             elif isinstance(val, (int, float)):
                                 values.append(str(val))
                             elif isinstance(val, datetime):
-                                values.append(f"TIMESTAMP '{val.strftime('%Y-%m-%d %H:%M:%S')}'")
+                                values.append(f"'{val.strftime('%Y-%m-%d %H:%M:%S')}'")
                             else:
-                                safe_val = str(val).replace("'", "''")
-                                values.append(f"'{safe_val}'")
+                                str_val = str(val).replace("'", "''").replace("\\", "\\\\")
+                                values.append(f"'{str_val}'")
                         
                         values_list.append(f"({', '.join(values)})")
                     
-                    # INSERT masivo en un solo query
                     insert_query = f"""
-                    INSERT INTO {full_table} ({cols_str})
+                    INSERT INTO {full_table_name}
                     VALUES {', '.join(values_list)}
                     """
                     
                     self.execute_query(insert_query)
-                    inserted += len(batch)
+                    success_count += len(batch)
                     
-                    # Mostrar progreso
-                    elapsed = (datetime.now() - start_time).total_seconds()
-                    rate = inserted / elapsed if elapsed > 0 else 0
-                    progress = (inserted / total_rows) * 100
-                    
-                    logger.info(f"⚡ {inserted:,}/{total_rows:,} ({progress:.1f}%) - {rate:.0f} filas/s")
-                    
-                except Exception as batch_error:
-                    logger.error(f"❌ Error en lote {i}-{i+batch_size}: {batch_error}")
-                    failed += len(batch)
-                    # Continuar con el siguiente lote
-                    continue
+                    if (i + batch_size) % 5000 == 0:
+                        logger.info(f"   Progreso: {success_count:,}/{total_records:,}")
+                
+                except Exception as e:
+                    logger.error(f"Error en lote {i}: {str(e)}")
+                    error_count += len(batch)
             
-            elapsed = (datetime.now() - start_time).total_seconds()
-            logger.info(f"✅ {inserted:,} registros insertados en {elapsed:.1f}s")
-            
-            if failed > 0:
-                logger.warning(f"⚠️ {failed:,} registros fallaron")
-            
-            avg_rate = inserted / elapsed if elapsed > 0 else 0
-            logger.info(f"⚡ Velocidad promedio: {avg_rate:.0f} filas/s")
+            logger.info(f"✅ {success_count:,} registros insertados")
             
             return {
-                "success": inserted, 
-                "failed": failed, 
-                "elapsed": elapsed,
-                "rate": avg_rate
+                'total': total_records,
+                'success': success_count,
+                'errors': error_count,
+                'table_name': clean_table_name
             }
             
         except Exception as e:
-            logger.error(f"❌ Error en insert_dataframe: {e}", exc_info=True)
+            logger.error(f"Error insertando DataFrame: {str(e)}")
             raise
     
     def table_exists(self, table_name: str) -> bool:
@@ -390,13 +439,25 @@ class DatabricksService:
         try:
             clean_table_name = self.sanitize_table_name(table_name)
             query = f"SELECT COUNT(*) as count FROM {self.catalog}.{self.schema}.{clean_table_name}"
-            cursor = self.execute_query(query)
-            result = cursor.fetchone()
-            return result['count'] if result else 0
+            results = self.execute_query(query)
+            return results[0]['count'] if results else 0
         except Exception as e:
             logger.error(f"Error contando: {str(e)}")
             return 0
-
+    
+    def get_table_info(self, table_name: str):
+        """Obtiene información de una tabla"""
+        query = f"""
+        DESCRIBE EXTENDED {self.catalog}.{self.schema}.{table_name}
+        """
+        
+        try:
+            results = self.execute_query(query)
+            return results
+        except Exception as e:
+            logger.error(f"Error obteniendo info de tabla: {str(e)}")
+            return None
+    
     def insert_audit_log(self, process: str, level: str, message: str,
                         metadata: dict = None, user_id: str = None) -> bool:
         """Log de auditoría"""
@@ -423,19 +484,6 @@ class DatabricksService:
             return True
         except Exception as e:
             logger.error(f"Error audit log: {str(e)}")
-            return False
-    
-    def setup_database(self):
-        """Setup inicial"""
-        logger.info("🔧 Configurando BD...")
-        try:
-            self.create_catalog_and_schema()
-            self.create_raw_table()
-            self.create_audit_table()
-            logger.info("✅ BD configurada")
-            return True
-        except Exception as e:
-            logger.error(f"Error setup: {str(e)}")
             return False
 
 
