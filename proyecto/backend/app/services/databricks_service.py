@@ -47,44 +47,46 @@ class DatabricksService:
                 logger.info("Conexión cerrada")
             except Exception as e:
                 logger.error(f"Error cerrando conexión: {str(e)}")
-    
-    def execute_query(self, query: str):
-        """Ejecuta una consulta SQL y retorna resultados"""
-        if not self.connection:  # ✅ CORREGIDO: verificar el atributo
-            if not self.connect():
-                return []
-        
+
+    def ensure_connected(self):
+        """Asegura que hay conexión activa"""
         try:
-            cursor = self.connection.cursor()  # ✅ CORREGIDO: usar self.connection
-            cursor.execute(query)
+            if not self.connection:
+                self.connect()
+                return
             
-            if cursor.description:
-                columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-                results = [dict(zip(columns, row)) for row in rows]
-            else:
-                results = []
-            
+            # ✅ Verificar con un query simple
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT 1")
             cursor.close()
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error ejecutando query: {str(e)}")
-            logger.error(f"Query: {query}")
-            raise
+        except:
+            # Si falla, reconectar
+            logger.warning("⚠️ Conexión inválida, reconectando...")
+            self.connect()
     
-    def sanitize_column_name(self, column_name: str) -> str:
-        """Limpia nombres de columnas para SQL"""
-        clean = str(column_name).lower().strip()
-        clean = re.sub(r'[^\w\s]', '_', clean)
-        clean = re.sub(r'\s+', '_', clean)
-        clean = re.sub(r'\+', '', clean)
-        clean = clean.strip('_')
+    def execute_query(self, query: str, params=None):
+        """Ejecuta query con reconexión automática"""
+        try:
+            self.ensure_connected()  # ✅ Verificar primero
+            cursor = self.connection.cursor()
+            cursor.execute(query, params or [])
+            return cursor
+        except Exception as e:
+            logger.error(f"❌ Error: {e}")
+            raise
         
-        if clean and clean[0].isdigit():
-            clean = f'col_{clean}'
-        
-        return clean if clean else 'unnamed_column'
+        def sanitize_column_name(self, column_name: str) -> str:
+            """Limpia nombres de columnas para SQL"""
+            clean = str(column_name).lower().strip()
+            clean = re.sub(r'[^\w\s]', '_', clean)
+            clean = re.sub(r'\s+', '_', clean)
+            clean = re.sub(r'\+', '', clean)
+            clean = clean.strip('_')
+            
+            if clean and clean[0].isdigit():
+                clean = f'col_{clean}'
+            
+            return clean if clean else 'unnamed_column'
     
     def sanitize_table_name(self, filename: str) -> str:
         """Genera nombre de tabla válido desde nombre de archivo"""
@@ -185,6 +187,7 @@ class DatabricksService:
         Returns:
             str: Nombre limpio de la tabla creada
         """
+        self.ensure_connected()
         try:
             clean_table_name = self.sanitize_table_name(table_name)
             full_table_name = f"{self.catalog}.{self.schema}.{clean_table_name}"
@@ -259,78 +262,43 @@ class DatabricksService:
             logger.error(f"Error insertando RAW: {str(e)}")
             return False
     
-    def insert_dataframe(self, df: pd.DataFrame, table_name: str, 
-                        ingestion_id: str, batch_size: int = 1000) -> dict:
-        """
-        Inserta DataFrame completo en tabla
-        """
-        clean_table_name = self.sanitize_table_name(table_name)
-        full_table_name = f"{self.catalog}.{self.schema}.{clean_table_name}"
-        
-        total_records = len(df)
-        success_count = 0
-        error_count = 0
-        
+    def insert_dataframe(self, df, table_name, ingestion_id, batch_size=10000):
+        """Inserción masiva con executemany"""
         try:
-            # Limpiar columnas
-            df_clean = df.copy()
-            df_clean.columns = [self.sanitize_column_name(col) for col in df_clean.columns]
+            self.ensure_connected()
             
-            # Metadatos
-            df_clean['_ingestion_id'] = ingestion_id
-            df_clean['_processed_at'] = datetime.now()
+            table_name = self.sanitize_table_name(table_name)
+            # ✅ CORRECTO: usar self.catalog y self.schema con puntos
+            full_table = f"`{self.catalog}`.`{self.schema}`.`{table_name}`"
             
-            # Insertar por lotes
-            for i in range(0, len(df_clean), batch_size):
-                batch = df_clean.iloc[i:i+batch_size]
-                
-                try:
-                    values_list = []
-                    for _, row in batch.iterrows():
-                        values = []
-                        for col in batch.columns:
-                            val = row[col]
-                            
-                            if pd.isna(val):
-                                values.append('NULL')
-                            elif isinstance(val, bool):
-                                values.append('TRUE' if val else 'FALSE')
-                            elif isinstance(val, (int, float)):
-                                values.append(str(val))
-                            elif isinstance(val, datetime):
-                                values.append(f"'{val.strftime('%Y-%m-%d %H:%M:%S')}'")
-                            else:
-                                str_val = str(val).replace("'", "''").replace("\\", "\\\\")
-                                values.append(f"'{str_val}'")
-                        
-                        values_list.append(f"({', '.join(values)})")
-                    
-                    insert_query = f"""
-                    INSERT INTO {full_table_name}
-                    VALUES {', '.join(values_list)}
-                    """
-                    
-                    self.execute_query(insert_query)
-                    success_count += len(batch)
-                    
-                    if (i + batch_size) % 5000 == 0:
-                        logger.info(f"   Progreso: {success_count:,}/{total_records:,}")
-                
-                except Exception as e:
-                    logger.error(f"Error en lote {i}: {str(e)}")
-                    error_count += len(batch)
+            # Preparar datos
+            columns = [self.sanitize_column_name(col) for col in df.columns]
+            placeholders = ', '.join(['?' for _ in columns])
+            cols_str = ', '.join([f'`{col}`' for col in columns])
             
-            logger.info(f"✅ {success_count:,} registros insertados")
+            insert_query = f"""
+                INSERT INTO {full_table} ({cols_str}, ingestion_id, created_at)
+                VALUES ({placeholders}, ?, ?)
+            """
             
-            return {
-                'total': total_records,
-                'success': success_count,
-                'errors': error_count,
-                'table_name': clean_table_name
-            }
+            # Convertir DataFrame a lista de tuplas
+            timestamp = datetime.now().isoformat()
+            rows = []
+            for _, row in df.iterrows():
+                values = tuple(row.tolist()) + (ingestion_id, timestamp)
+                rows.append(values)
+            
+            # Inserción masiva
+            cursor = self.connection.cursor()
+            cursor.executemany(insert_query, rows)
+            cursor.close()
+            
+            logger.info(f"✅ {len(rows):,} registros insertados")
+            
+            return {"success": len(rows), "failed": 0}
             
         except Exception as e:
-            logger.error(f"Error insertando DataFrame: {str(e)}")
+            logger.error(f"❌ Error: {e}")
             raise
     
     def table_exists(self, table_name: str) -> bool:
@@ -354,6 +322,25 @@ class DatabricksService:
             logger.error(f"Error contando: {str(e)}")
             return 0
     
+    def sanitize_column_name(self, col_name: str) -> str:
+        """Limpia nombres de columnas para SQL"""
+        import re
+        # Remover caracteres especiales, solo alfanuméricos y _
+        clean = re.sub(r'[^\w]', '_', str(col_name))
+        # No empezar con número
+        if clean[0].isdigit():
+            clean = f"col_{clean}"
+        # Límite de longitud
+        clean = clean[:128]
+        return clean.lower()
+
+    def sanitize_table_name(self, name: str) -> str:
+        """Limpia nombres de tablas"""
+        name = self.sanitize_column_name(name)  # ✅ Ahora existe
+        # Remover extensiones
+        name = name.replace('.csv', '').replace('.xlsx', '').replace('.json', '')
+        return name
+
     def insert_audit_log(self, process: str, level: str, message: str,
                         metadata: dict = None, user_id: str = None) -> bool:
         """Log de auditoría"""
