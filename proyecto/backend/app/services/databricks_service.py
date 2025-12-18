@@ -13,13 +13,13 @@ logger = logging.getLogger(__name__)
 class DatabricksService:
     """Servicio dinámico para Databricks - crea tablas basadas en CSV"""
     
-    def _init_(self):
+    def __init__(self):  # ✅ CORREGIDO: dos guiones bajos
         self.host = settings.DATABRICKS_HOST
         self.token = settings.DATABRICKS_TOKEN
         self.cluster_id = settings.DATABRICKS_CLUSTER_ID
         self.catalog = settings.DATABRICKS_CATALOG
         self.schema = settings.DATABRICKS_SCHEMA
-        self.connection = None
+        self.connection = None  # ✅ Atributo para la conexión
         
     def connect(self):
         """Establece conexión con Databricks SQL Warehouse"""
@@ -28,7 +28,7 @@ class DatabricksService:
                 logger.warning("Databricks credentials not configured")
                 return False
                 
-            self.connection = sql.connect(
+            self.connection = sql.connect(  # ✅ CORREGIDO: asignar a self.connection
                 server_hostname=self.host,
                 http_path=f"/sql/1.0/warehouses/{self.cluster_id}",
                 access_token=self.token
@@ -41,21 +41,21 @@ class DatabricksService:
     
     def disconnect(self):
         """Cierra la conexión"""
-        if self.connect:
+        if self.connection:  # ✅ CORREGIDO: verificar el atributo, no el método
             try:
-                self.connect.close()
+                self.connection.close()  # ✅ CORREGIDO: cerrar la conexión
                 logger.info("Conexión cerrada")
             except Exception as e:
                 logger.error(f"Error cerrando conexión: {str(e)}")
     
     def execute_query(self, query: str):
         """Ejecuta una consulta SQL y retorna resultados"""
-        if not self.connect:
+        if not self.connection:  # ✅ CORREGIDO: verificar el atributo
             if not self.connect():
                 return []
         
         try:
-            cursor = self.connect.cursor()
+            cursor = self.connection.cursor()  # ✅ CORREGIDO: usar self.connection
             cursor.execute(query)
             
             if cursor.description:
@@ -78,7 +78,7 @@ class DatabricksService:
         clean = str(column_name).lower().strip()
         clean = re.sub(r'[^\w\s]', '_', clean)
         clean = re.sub(r'\s+', '_', clean)
-        clean = re.sub(r'+', '', clean)
+        clean = re.sub(r'\+', '', clean)
         clean = clean.strip('_')
         
         if clean and clean[0].isdigit():

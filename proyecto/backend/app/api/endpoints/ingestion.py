@@ -219,7 +219,7 @@ async def upload_covid_data(file: UploadFile = File(...)):
         records_count = len(df)
         logger.info(f"✅ {records_count:,} registros")
         logger.info(f"📋 Columnas: {metadata['original_columns']}")
-        
+        table_name = None 
         # GUARDAR EN DATABRICKS
         if databricks_service.host and databricks_service.token:
             logger.info("💾 Guardando en Databricks...")
