@@ -138,7 +138,7 @@ function Dashboard() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold text-espe-dark">
-            Dashboard COVID-19
+            Visualización de Datos
           </h1>
           <p className="text-gray-600 mt-1">Módulo 5: Visualización de Datos</p>
           <p className="text-xs text-gray-500 mt-1">

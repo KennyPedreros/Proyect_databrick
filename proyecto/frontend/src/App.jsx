@@ -23,42 +23,42 @@ function App() {
   const modules = [
     {
       id: "dashboard",
-      name: "Dashboard",
+      name: "Visualización de Datos",
       icon: Home,
-      number: 5,
+      number: 1,
       component: Dashboard,
     },
     {
       id: "upload",
-      name: "Cargar Datos",
+      name: "Ingestar Datos",
       icon: Upload,
-      number: 1,
+      number: 2,
       component: FileUploader,
     },
     {
       id: "clean",
-      name: "Limpiar Datos",
+      name: "Procesamiento y Limpieza",
       icon: Sparkles,
       number: 3,
       component: DataCleaner,
     },
     {
       id: "classify",
-      name: "Clasificar",
+      name: "Clasificación de Datos",
       icon: Tag,
       number: 4,
       component: Classifier,
     },
     {
       id: "rag",
-      name: "Consultas RAG",
+      name: "Agente Inteligente",
       icon: BarChart3,
-      number: null,
+      number: 5,
       component: ChatRAG,
     },
     {
       id: "monitor",
-      name: "Monitoreo",
+      name: "Monitoreo y Auditoría",
       icon: Monitor,
       number: 6,
       component: ProcessMonitor,
@@ -131,7 +131,7 @@ function App() {
         {sidebarOpen && (
           <div className="p-4 border-t border-espe-green-light text-xs text-espe-green-lighter">
             <p>Universidad de las Fuerzas Armadas</p>
-            <p className="font-bold">ESPE - 2024</p>
+            <p className="font-bold">ESPE - 2025</p>
           </div>
         )}
       </aside>
