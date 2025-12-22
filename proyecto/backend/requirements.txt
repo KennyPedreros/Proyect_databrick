@@ -15,7 +15,7 @@ numpy>=1.24.0
 openpyxl>=3.1.0
 xlrd>=2.0.1
 
-# Cliente de Databricks
+# ⚡ DATABRICKS - INGESTA ULTRA RÁPIDA ⚡
 databricks-sql-connector>=3.0.0
 databricks-sdk>=0.12.0
 
