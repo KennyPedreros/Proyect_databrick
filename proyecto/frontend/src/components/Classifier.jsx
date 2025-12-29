@@ -1,259 +1,432 @@
-import React, { useState } from "react";
-import { Sparkles, Tag, TrendingUp, Brain } from "lucide-react";
+import React, { useState, useEffect } from "react";
 import {
-  runClassification,
-  getModelMetrics,
-} from "../services/classificationAPI";
+  Brain,
+  CheckCircle,
+  AlertCircle,
+  Sparkles,
+  ChevronRight,
+  History,
+  Clock,
+  TrendingUp,
+  List,
+} from "lucide-react";
+import api from "../services/api";
 
 function Classifier() {
-  const [running, setRunning] = useState(false);
-  const [results, setResults] = useState(null);
-  const [metrics, setMetrics] = useState(null);
+  const [step, setStep] = useState(1);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [executing, setExecuting] = useState(false);
+  const [error, setError] = useState(null);
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [selectedClassifications, setSelectedClassifications] = useState([]);
+  const [executionResult, setExecutionResult] = useState(null);
+  const [history, setHistory] = useState([]);
 
-  const handleClassify = async () => {
-    setRunning(true);
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const fetchHistory = async () => {
     try {
-      const response = await runClassification();
-      setResults(response);
-      loadMetrics();
-    } catch (error) {
-      console.error("Error in classification:", error);
+      const response = await api.get("/api/classify/classification-history?limit=5");
+      setHistory(response.data.history || []);
+    } catch (err) {
+      console.error("Error cargando historial:", err);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    setError(null);
+    setAnalysisResult(null);
+
+    try {
+      const response = await api.post("/api/classify/analyze", {});
+      setAnalysisResult(response.data);
+
+      const defaultSelections = response.data.classifiable_columns.flatMap(
+        (col) =>
+          col.suggestions.map((sug) => ({
+            column: col.column_name,
+            new_column: sug.name,
+            type: sug.type,
+            ranges: sug.ranges || null,
+          }))
+      );
+      setSelectedClassifications(defaultSelections);
+      setStep(2);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message);
     } finally {
-      setRunning(false);
+      setAnalyzing(false);
     }
   };
 
-  const loadMetrics = async () => {
+  const handleExecute = async () => {
+    if (selectedClassifications.length === 0) {
+      setError("Debes seleccionar al menos una clasificación");
+      return;
+    }
+
+    setExecuting(true);
+    setError(null);
+
     try {
-      const metricsData = await getModelMetrics();
-      setMetrics(metricsData);
-    } catch (error) {
-      console.error("Error loading metrics:", error);
+      const response = await api.post("/api/classify/execute", {
+        table_name: analysisResult.table_name,
+        classifications: selectedClassifications.map((c) => ({
+          column: c.column,
+          new_column: c.new_column,
+          type: c.type,
+          ranges: c.ranges,
+        })),
+      });
+
+      setExecutionResult(response.data);
+      await fetchHistory();
+      setStep(3);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message);
+    } finally {
+      setExecuting(false);
     }
   };
 
-  const severityColors = {
-    Leve: "bg-green-100 text-green-800 border-green-300",
-    Moderado: "bg-yellow-100 text-yellow-800 border-yellow-300",
-    Grave: "bg-orange-100 text-orange-800 border-orange-300",
-    Crítico: "bg-red-100 text-red-800 border-red-300",
+  const toggleClassification = (classification) => {
+    const isSelected = selectedClassifications.some(
+      (c) =>
+        c.column === classification.column &&
+        c.new_column === classification.new_column
+    );
+
+    if (isSelected) {
+      setSelectedClassifications(
+        selectedClassifications.filter(
+          (c) =>
+            c.column !== classification.column ||
+            c.new_column !== classification.new_column
+        )
+      );
+    } else {
+      setSelectedClassifications([...selectedClassifications, classification]);
+    }
+  };
+
+  const resetWizard = () => {
+    setStep(1);
+    setAnalysisResult(null);
+    setSelectedClassifications([]);
+    setExecutionResult(null);
+    setError(null);
   };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 fade-in">
-      {/* Header */}
       <div>
         <h1 className="text-3xl font-bold text-espe-dark">
-          Clasificación Inteligente
+          Clasificación Automática
         </h1>
-        <p className="text-gray-600 mt-1">
-          Módulo 4: Clasificación y Etiquetado con IA
-        </p>
+        <p className="text-gray-600 mt-1">Módulo 4: Clasificación de Datos</p>
       </div>
 
-      {/* Action Card */}
-      <div className="bg-gradient-to-r from-espe-green to-espe-green-light rounded-xl shadow-lg p-8 text-white">
+      <div className="bg-white rounded-xl shadow-md p-6">
         <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold mb-2">
-              Clasificación Automática
-            </h2>
-            <p className="text-espe-white/90">
-              Utiliza LangChain + LLMs para etiquetar casos por severidad
-              automáticamente
-            </p>
-            <div className="flex gap-4 mt-4">
-              <div className="flex items-center gap-2">
-                <Brain size={20} />
-                <span className="text-sm">OpenAI GPT-4</span>
+          {[
+            { num: 1, label: "Analizar" },
+            { num: 2, label: "Configurar" },
+            { num: 3, label: "Resultado" },
+          ].map((s, idx) => (
+            <React.Fragment key={s.num}>
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
+                    step >= s.num
+                      ? "bg-espe-green text-white"
+                      : "bg-gray-200 text-gray-500"
+                  }`}
+                >
+                  {step > s.num ? <CheckCircle size={20} /> : s.num}
+                </div>
+                <span
+                  className={`font-semibold ${
+                    step >= s.num ? "text-espe-dark" : "text-gray-400"
+                  }`}
+                >
+                  {s.label}
+                </span>
               </div>
-              <div className="flex items-center gap-2">
-                <Sparkles size={20} />
-                <span className="text-sm">LangChain Agents</span>
-              </div>
-            </div>
-          </div>
-          <button
-            onClick={handleClassify}
-            disabled={running}
-            className="bg-white text-espe-green px-8 py-4 rounded-lg font-semibold hover:bg-espe-gray transition-colors disabled:opacity-50 flex items-center gap-2"
-          >
-            <Tag size={20} />
-            {running ? "Clasificando..." : "Iniciar Clasificación"}
-          </button>
+              {idx < 2 && (
+                <ChevronRight
+                  className={step > s.num ? "text-espe-green" : "text-gray-300"}
+                />
+              )}
+            </React.Fragment>
+          ))}
         </div>
       </div>
 
-      {/* Results */}
-      {results && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Distribution */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-espe-dark mb-4 flex items-center gap-2">
-              <Tag size={20} className="text-espe-green" />
-              Distribución de Severidad
-            </h3>
-
-            <div className="space-y-3">
-              {Object.entries(results.distribution || {}).map(
-                ([severity, count]) => (
-                  <div key={severity}>
-                    <div className="flex justify-between mb-1">
-                      <span className="font-medium">{severity}</span>
-                      <span className="text-gray-600">{count} casos</span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-3">
-                      <div
-                        className={`h-3 rounded-full ${
-                          severity === "Leve"
-                            ? "bg-green-500"
-                            : severity === "Moderado"
-                            ? "bg-yellow-500"
-                            : severity === "Grave"
-                            ? "bg-orange-500"
-                            : "bg-red-500"
-                        }`}
-                        style={{ width: `${(count / results.total) * 100}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                )
-              )}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 flex-shrink-0" size={24} />
+            <div>
+              <h4 className="font-semibold text-red-900">Error</h4>
+              <p className="text-sm text-red-800 mt-1">{error}</p>
             </div>
-
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <div className="flex justify-between">
-                <span className="font-semibold">Total Clasificado:</span>
-                <span className="font-bold text-espe-green">
-                  {results.total}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Model Performance */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-espe-dark mb-4 flex items-center gap-2">
-              <TrendingUp size={20} className="text-espe-green" />
-              Métricas del Modelo
-            </h3>
-
-            {metrics ? (
-              <div className="space-y-4">
-                <div className="bg-espe-gray p-4 rounded-lg">
-                  <p className="text-sm text-gray-600 mb-1">
-                    Precisión (Accuracy)
-                  </p>
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 bg-gray-200 rounded-full h-2 mr-3">
-                      <div
-                        className="bg-espe-green h-2 rounded-full"
-                        style={{ width: `${metrics.accuracy * 100}%` }}
-                      ></div>
-                    </div>
-                    <span className="font-bold text-espe-dark">
-                      {(metrics.accuracy * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                </div>
-
-                <div className="bg-espe-gray p-4 rounded-lg">
-                  <p className="text-sm text-gray-600 mb-1">F1-Score</p>
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 bg-gray-200 rounded-full h-2 mr-3">
-                      <div
-                        className="bg-espe-green-light h-2 rounded-full"
-                        style={{ width: `${metrics.f1_score * 100}%` }}
-                      ></div>
-                    </div>
-                    <span className="font-bold text-espe-dark">
-                      {(metrics.f1_score * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-blue-50 p-3 rounded-lg text-center">
-                    <p className="text-xs text-gray-600">Precision</p>
-                    <p className="text-xl font-bold text-espe-dark">
-                      {(metrics.precision * 100).toFixed(1)}%
-                    </p>
-                  </div>
-                  <div className="bg-purple-50 p-3 rounded-lg text-center">
-                    <p className="text-xs text-gray-600">Recall</p>
-                    <p className="text-xl font-bold text-espe-dark">
-                      {(metrics.recall * 100).toFixed(1)}%
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <p className="text-gray-500 text-center py-8">
-                Ejecuta la clasificación para ver métricas
-              </p>
-            )}
           </div>
         </div>
       )}
 
-      {/* Sample Classifications */}
-      {results?.samples && (
+      {step === 1 && (
+        <div className="bg-white rounded-xl shadow-md p-8">
+          <div className="text-center">
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-espe-green/10 rounded-full mb-4">
+              <Brain size={40} className="text-espe-green" />
+            </div>
+
+            <h2 className="text-2xl font-bold text-espe-dark mb-2">
+              Análisis Inteligente
+            </h2>
+
+            <p className="text-gray-600 mb-6 max-w-2xl mx-auto">
+              El sistema analizará automáticamente tu tabla más reciente y
+              sugerirá clasificaciones basadas en el tipo de datos.
+            </p>
+
+            <button
+              onClick={handleAnalyze}
+              disabled={analyzing}
+              className="bg-espe-green text-white px-8 py-4 rounded-lg hover:bg-espe-green-light transition-colors disabled:opacity-50 text-lg font-semibold shadow-lg"
+            >
+              {analyzing ? (
+                <div className="flex items-center gap-3">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  <span>Analizando tabla...</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Sparkles size={20} />
+                  <span>Analizar Tabla</span>
+                </div>
+              )}
+            </button>
+          </div>
+
+          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <TrendingUp className="text-blue-600" size={20} />
+                <h4 className="font-semibold text-blue-900">Numéricos</h4>
+              </div>
+              <p className="text-sm text-blue-800">
+                Crea rangos automáticos por cuartiles
+              </p>
+            </div>
+
+            <div className="bg-green-50 p-4 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <Clock className="text-green-600" size={20} />
+                <h4 className="font-semibold text-green-900">Fechas</h4>
+              </div>
+              <p className="text-sm text-green-800">
+                Extrae año, mes, trimestre
+              </p>
+            </div>
+
+            <div className="bg-purple-50 p-4 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <List className="text-purple-600" size={20} />
+                <h4 className="font-semibold text-purple-900">Categorías</h4>
+              </div>
+              <p className="text-sm text-purple-800">
+                Detecta valores únicos
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {step === 2 && analysisResult && (
         <div className="bg-white rounded-xl shadow-md p-6">
-          <h3 className="text-lg font-bold text-espe-dark mb-4">
-            Ejemplos Clasificados
-          </h3>
+          <h2 className="text-xl font-bold text-espe-dark mb-4">
+            Configurar Clasificaciones
+          </h2>
+          <p className="text-gray-600 mb-4">
+            Tabla: <strong>{analysisResult.table_name}</strong> |{" "}
+            {analysisResult.total_classifiable} columnas clasificables
+          </p>
+
+          <div className="space-y-4">
+            {analysisResult.classifiable_columns.map((col) => (
+              <div
+                key={col.column_name}
+                className="border border-gray-200 rounded-lg p-4"
+              >
+                <div className="mb-2">
+                  <h3 className="font-semibold text-espe-dark">
+                    {col.column_name}
+                  </h3>
+                  <p className="text-sm text-gray-500">
+                    {col.classification_type} | {col.unique_values} valores
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  {col.suggestions.map((sug, idx) => {
+                    const classification = {
+                      column: col.column_name,
+                      new_column: sug.name,
+                      type: sug.type,
+                      ranges: sug.ranges || null,
+                    };
+                    const isSelected = selectedClassifications.some(
+                      (c) =>
+                        c.column === classification.column &&
+                        c.new_column === classification.new_column
+                    );
+
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => toggleClassification(classification)}
+                        className={`p-3 rounded-lg border cursor-pointer ${
+                          isSelected
+                            ? "border-espe-green bg-espe-green/5"
+                            : "border-gray-200 hover:border-espe-green/50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {}}
+                            className="w-5 h-5"
+                          />
+                          <div className="flex-1">
+                            <p className="font-medium">{sug.name}</p>
+                            <p className="text-sm text-gray-600">
+                              {sug.description || sug.type}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex gap-4 mt-6">
+            <button
+              onClick={resetWizard}
+              className="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleExecute}
+              disabled={executing || selectedClassifications.length === 0}
+              className="flex-1 bg-espe-green text-white px-6 py-3 rounded-lg hover:bg-espe-green-light disabled:opacity-50 font-semibold"
+            >
+              {executing ? (
+                <div className="flex items-center justify-center gap-3">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  <span>Clasificando...</span>
+                </div>
+              ) : (
+                `Ejecutar ${selectedClassifications.length} Clasificaciones`
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && executionResult && (
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <CheckCircle className="text-green-600" size={32} />
+            <div>
+              <h3 className="text-xl font-bold text-espe-dark">
+                ¡Clasificación Completada!
+              </h3>
+              <p className="text-sm text-gray-600">{executionResult.message}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-blue-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Registros</p>
+              <p className="text-2xl font-bold text-espe-dark">
+                {executionResult.total_records.toLocaleString()}
+              </p>
+            </div>
+
+            <div className="bg-green-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Clasificaciones</p>
+              <p className="text-2xl font-bold text-green-700">
+                {executionResult.classifications_applied}
+              </p>
+            </div>
+
+            <div className="bg-purple-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Tiempo</p>
+              <p className="text-2xl font-bold text-purple-700">
+                {executionResult.elapsed_seconds.toFixed(1)}s
+              </p>
+            </div>
+
+            <div className="bg-orange-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Nueva Tabla</p>
+              <p className="text-xs font-bold text-orange-700 break-all">
+                {executionResult.classified_table}
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={resetWizard}
+            className="w-full bg-espe-green text-white px-6 py-3 rounded-lg hover:bg-espe-green-light font-semibold"
+          >
+            Clasificar Otra Tabla
+          </button>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <History className="text-espe-dark" size={24} />
+            <h3 className="text-xl font-bold text-espe-dark">
+              Historial de Clasificaciones
+            </h3>
+          </div>
 
           <div className="space-y-3">
-            {results.samples.slice(0, 5).map((sample, idx) => (
+            {history.map((item, index) => (
               <div
-                key={idx}
-                className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                key={index}
+                className="border border-gray-200 rounded-lg p-4"
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <p className="text-sm text-gray-700">{sample.text}</p>
-                    <div className="flex gap-2 mt-2">
-                      <span className="text-xs text-gray-500">
-                        Edad: {sample.age}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        Síntomas: {sample.symptoms}
-                      </span>
-                    </div>
-                  </div>
-                  <span
-                    className={`px-3 py-1 rounded-full text-sm font-semibold border ${
-                      severityColors[sample.predicted_severity]
-                    }`}
-                  >
-                    {sample.predicted_severity}
+                <div className="flex items-center gap-2 mb-1">
+                  <Clock size={16} className="text-gray-500" />
+                  <span className="text-sm text-gray-600">
+                    {new Date(item.timestamp).toLocaleString("es-ES")}
                   </span>
                 </div>
-                <div className="mt-2 text-xs text-gray-500">
-                  Confianza: {(sample.confidence * 100).toFixed(1)}%
+                <p className="font-semibold text-espe-dark">
+                  {item.source_table} → {item.classified_table}
+                </p>
+                <div className="flex gap-4 mt-2 text-xs text-gray-600">
+                  <span>{item.total_records.toLocaleString()} registros</span>
+                  <span>{item.classifications_applied} clasificaciones</span>
+                  <span>{item.elapsed_seconds.toFixed(1)}s</span>
                 </div>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      {/* Info */}
-      <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-        <div className="flex gap-3">
-          <Brain className="text-purple-600 flex-shrink-0" size={20} />
-          <div>
-            <h4 className="font-semibold text-purple-900">
-              Clasificación con IA
-            </h4>
-            <p className="text-sm text-purple-800 mt-1">
-              El sistema utiliza modelos de lenguaje (LLMs) para analizar
-              síntomas, edad y otros factores, clasificando automáticamente cada
-              caso en: Leve, Moderado, Grave o Crítico.
-            </p>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

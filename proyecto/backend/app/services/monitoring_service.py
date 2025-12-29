@@ -266,19 +266,25 @@ class MonitoringService:
                 return {"status": "unhealthy", "message": "No se pudo conectar"}
             
             # Verificar que podemos acceder a las tablas
+            active_table = databricks_service.get_active_table()
+            if not active_table:
+                databricks_service.disconnect()
+                return {"status": "warning", "message": "No hay tabla activa"}
+
             query = f"""
             SELECT COUNT(*) as total
-            FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+            FROM {databricks_service.catalog}.{databricks_service.schema}.{active_table}
             LIMIT 1
             """
-            
+
             result = databricks_service.execute_query(query)
             databricks_service.disconnect()
-            
+
             return {
                 "status": "healthy",
                 "message": "Tablas accesibles",
-                "record_count": result[0]['total'] if result else 0
+                "record_count": result[0]['total'] if result else 0,
+                "active_table": active_table
             }
         
         except Exception as e:
@@ -301,9 +307,13 @@ class MonitoringService:
             if not databricks_service.connect():
                 return {"status": "unknown"}
             
+            active_table = databricks_service.get_active_table()
+            if not active_table:
+                return {"status": "unknown", "message": "No hay tabla activa"}
+
             query = f"""
-            SELECT MAX(processed_at) as last_update
-            FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+            SELECT MAX(_processed_at) as last_update
+            FROM {databricks_service.catalog}.{databricks_service.schema}.{active_table}
             """
             
             result = databricks_service.execute_query(query)
@@ -335,30 +345,29 @@ class MonitoringService:
         try:
             if not databricks_service.connect():
                 return {}
-            
+
+            # Obtener tabla activa dinámicamente
+            active_table = databricks_service.get_active_table()
+            if not active_table:
+                databricks_service.disconnect()
+                return {"message": "No hay tabla activa"}
+
             query = f"""
-            SELECT 
-                'covid_raw' as table_name,
+            SELECT
+                '{active_table}' as table_name,
                 COUNT(*) as record_count
-            FROM {databricks_service.catalog}.{databricks_service.schema}.covid_raw
-            
-            UNION ALL
-            
-            SELECT 
-                'covid_processed' as table_name,
-                COUNT(*) as record_count
-            FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
+            FROM {databricks_service.catalog}.{databricks_service.schema}.{active_table}
             """
-            
+
             results = databricks_service.execute_query(query)
             databricks_service.disconnect()
-            
+
             sizes = {}
             for row in results:
                 sizes[row['table_name']] = row['record_count']
-            
+
             return sizes
-        
+
         except Exception as e:
             return {"error": str(e)}
     
@@ -504,13 +513,13 @@ class MonitoringService:
                 return {}
             
             query = f"""
-            SELECT 
+            SELECT
                 DATE_TRUNC('hour', timestamp) as hour,
                 COUNT(*) as total_events,
-                COUNTIF(level = 'ERROR') as errors,
-                COUNTIF(level = 'WARNING') as warnings
+                SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) as errors,
+                SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) as warnings
             FROM {databricks_service.catalog}.{databricks_service.schema}.audit_logs
-            WHERE timestamp >= DATE_SUB(NOW(), {hours})
+            WHERE timestamp >= CURRENT_TIMESTAMP() - INTERVAL {hours} HOURS
             GROUP BY DATE_TRUNC('hour', timestamp)
             ORDER BY hour DESC
             """
@@ -538,15 +547,15 @@ class MonitoringService:
             if not databricks_service.connect():
                 return []
             
-            where_clauses = ["timestamp >= DATE_SUB(NOW(), 30)"]
-            
+            where_clauses = ["timestamp >= CURRENT_TIMESTAMP() - INTERVAL 30 DAYS"]
+
             if process:
                 where_clauses.append(f"process = '{process}'")
             if level:
                 where_clauses.append(f"level = '{level}'")
-            
+
             where_clause = " AND ".join(where_clauses)
-            
+
             query = f"""
             SELECT * FROM {databricks_service.catalog}.{databricks_service.schema}.audit_logs
             WHERE {where_clause}

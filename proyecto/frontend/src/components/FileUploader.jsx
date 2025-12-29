@@ -13,6 +13,8 @@ import api from "../services/api";
 function FileUploader() {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState("");
   const [result, setResult] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [uploadHistory, setUploadHistory] = useState([]);
@@ -66,10 +68,10 @@ function FileUploader() {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/json'
     ];
-    
+
     const fileExtension = file.name.split('.').pop().toLowerCase();
     const allowedExtensions = ['csv', 'xlsx', 'xls', 'json'];
-    
+
     if (!allowedExtensions.includes(fileExtension)) {
       setResult({
         success: false,
@@ -91,25 +93,64 @@ function FileUploader() {
 
     setUploading(true);
     setResult(null);
+    setUploadProgress(0);
+    setUploadStatus("Preparando archivo...");
+
+    // Simular progreso más realista (avanza cada 3 segundos)
+    const progressInterval = setInterval(() => {
+      setUploadProgress(prev => {
+        if (prev >= 95) {
+          setUploadStatus("Insertando registros en Databricks...");
+          return prev; // Mantener en 95% hasta que termine
+        }
+        if (prev >= 80) {
+          setUploadStatus("Insertando registros en Databricks...");
+          return prev + 2; // Avance lento en la parte final
+        }
+        if (prev >= 60) {
+          setUploadStatus("Procesando datos...");
+          return prev + 3;
+        } else if (prev >= 30) {
+          setUploadStatus("Creando tabla...");
+          return prev + 5;
+        } else if (prev >= 10) {
+          setUploadStatus("Subiendo archivo...");
+          return prev + 5;
+        }
+        return prev + 10; // Inicio rápido
+      });
+    }, 3000); // Cada 3 segundos en vez de 1
 
     try {
       const response = await uploadCovidData(file);
-      setResult({
-        success: true,
-        message: "Archivo cargado exitosamente",
-        details: response,
-      });
-      setFile(null);
-      loadHistory();
+
+      clearInterval(progressInterval);
+      setUploadProgress(100);
+      setUploadStatus("¡Completado!");
+
+      setTimeout(() => {
+        setResult({
+          success: true,
+          message: "Archivo cargado exitosamente",
+          details: response,
+        });
+        setFile(null);
+        setUploadProgress(0);
+        setUploadStatus("");
+        loadHistory();
+      }, 500);
     } catch (error) {
       console.error("Error uploading file:", error);
+      clearInterval(progressInterval);
+      setUploadProgress(0);
+      setUploadStatus("");
       setResult({
         success: false,
         message: "Error al cargar el archivo",
         error: error.response?.data?.detail || error.message,
       });
     } finally {
-      setUploading(false);
+      setTimeout(() => setUploading(false), 500);
     }
   };
 
@@ -161,23 +202,46 @@ function FileUploader() {
 
         {/* Selected File */}
         {file && (
-          <div className="mt-6 flex items-center justify-between bg-espe-gray p-4 rounded-lg">
-            <div className="flex items-center gap-3">
-              <File size={24} className="text-espe-green" />
-              <div>
-                <p className="font-medium text-espe-dark">{file.name}</p>
-                <p className="text-sm text-gray-600">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB
+          <div className="mt-6">
+            <div className="flex items-center justify-between bg-espe-gray p-4 rounded-lg">
+              <div className="flex items-center gap-3">
+                <File size={24} className="text-espe-green" />
+                <div>
+                  <p className="font-medium text-espe-dark">{file.name}</p>
+                  <p className="text-sm text-gray-600">
+                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleUpload}
+                disabled={uploading}
+                className="bg-espe-green text-white px-6 py-2 rounded-lg hover:bg-espe-green-light transition-colors disabled:opacity-50"
+              >
+                {uploading ? "Cargando..." : "Cargar"}
+              </button>
+            </div>
+
+            {/* Progress Bar */}
+            {uploading && (
+              <div className="mt-4 bg-gray-100 rounded-lg p-4">
+                <div className="flex justify-between text-sm mb-2">
+                  <span className="font-medium text-espe-dark">{uploadStatus}</span>
+                  <span className="font-semibold text-espe-green">{uploadProgress}%</span>
+                </div>
+                <div className="w-full bg-gray-300 rounded-full h-3 overflow-hidden">
+                  <div
+                    className="bg-espe-green h-3 rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${uploadProgress}%` }}
+                  >
+                    <div className="h-full bg-gradient-to-r from-transparent to-white/30"></div>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Por favor espera mientras procesamos tu archivo...
                 </p>
               </div>
-            </div>
-            <button
-              onClick={handleUpload}
-              disabled={uploading}
-              className="bg-espe-green text-white px-6 py-2 rounded-lg hover:bg-espe-green-light transition-colors disabled:opacity-50"
-            >
-              {uploading ? "Cargando..." : "Cargar"}
-            </button>
+            )}
           </div>
         )}
 

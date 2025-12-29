@@ -6,6 +6,8 @@ import {
   Activity,
   Download,
   RefreshCw,
+  Database,
+  Table,
 } from "lucide-react";
 import {
   LineChart,
@@ -26,43 +28,97 @@ import api from "../services/api";
 
 function Dashboard() {
   const [metrics, setMetrics] = useState(null);
-  const [timeSeries, setTimeSeries] = useState([]);
-  const [severityData, setSeverityData] = useState([]);
+  const [schema, setSchema] = useState(null);
+  const [dataPreview, setDataPreview] = useState([]);
+  const [columnStats, setColumnStats] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [availableTables, setAvailableTables] = useState([]);
+  const [selectedTableType, setSelectedTableType] = useState('auto'); // 'auto', 'original', 'clean', 'classified'
 
   useEffect(() => {
-  loadAllData();
-  
-  // AGREGAR: Auto-refresh cada 30 segundos
-  const interval = setInterval(() => {
     loadAllData();
-  }, 30000);
-  
-  return () => clearInterval(interval);
-}, []);
+  }, [selectedTableType]);
+
+  useEffect(() => {
+    loadAvailableTables();
+  }, []);
+
+  const loadAvailableTables = async () => {
+    try {
+      const response = await api.get("/api/dashboard/available-tables");
+      console.log("Tablas disponibles:", response.data);
+      setAvailableTables(response.data.tables || []);
+    } catch (err) {
+      console.error("Error cargando tablas disponibles:", err);
+      // Si falla, asumir que al menos hay original
+      setAvailableTables(['original']);
+    }
+  };
 
   const loadAllData = async () => {
     setLoading(true);
     setError(null);
     try {
-      // Cargar métricas principales
-      const metricsRes = await api.get("/api/dashboard/metrics");
+      // Recargar tablas disponibles también
+      await loadAvailableTables();
+
+      // Determinar qué tabla cargar según selección
+      const tableParam = selectedTableType !== 'auto' ? `?table_type=${selectedTableType}` : '';
+
+      // 1. Cargar métricas principales (solo total_cases funciona dinámicamente)
+      const metricsRes = await api.get(`/api/dashboard/metrics${tableParam}`);
       setMetrics(metricsRes.data);
 
-      // Cargar series temporales
-      const timeSeriesRes = await api.get("/api/dashboard/timeseries?days=30");
-      setTimeSeries(timeSeriesRes.data.data || []);
+      // 2. Cargar esquema de la tabla (DINÁMICO)
+      const schemaRes = await api.get(`/api/dashboard/schema${tableParam}`);
+      setSchema(schemaRes.data);
 
-      // Cargar distribución de severidad
-      const severityRes = await api.get("/api/dashboard/severity-distribution");
-      const severityArray = severityRes.data || [];
-      if (severityArray.length === 0) {
-        setSeverityData([
-          { name: "Sin datos", value: 1, color: "#999999" }
-        ]);
-      } else {
-        setSeverityData(severityArray);
+      // 3. Cargar vista previa de datos
+      const previewRes = await api.get(`/api/dashboard/data-preview?limit=100${tableParam.replace('?', '&')}`);
+      setDataPreview(previewRes.data.data || []);
+
+      // 4. Cargar estadísticas INTELIGENTES según tipo de tabla
+      if (schemaRes.data.columns && schemaRes.data.columns.length > 0) {
+        const stats = {};
+
+        // Determinar qué columnas analizar según el tipo de tabla
+        let columnsToAnalyze = [];
+
+        if (selectedTableType === 'classified' || schemaRes.data.table_name?.includes('_classified')) {
+          // Si es tabla CLASIFICADA: Buscar columnas que terminen en _categoria, _grupo, _rango, etc.
+          columnsToAnalyze = schemaRes.data.columns.filter(col =>
+            col.name.includes('_categoria') ||
+            col.name.includes('_grupo') ||
+            col.name.includes('_rango') ||
+            col.name.includes('_anio') ||
+            col.name.includes('_mes') ||
+            col.name.includes('_trimestre')
+          ).slice(0, 3);
+
+          // Si no hay columnas clasificadas, tomar las primeras 3
+          if (columnsToAnalyze.length === 0) {
+            columnsToAnalyze = schemaRes.data.columns.slice(0, 3);
+          }
+        } else {
+          // Para tablas ORIGINAL o CLEAN: Tomar primeras 2 columnas (más rápido)
+          columnsToAnalyze = schemaRes.data.columns.slice(0, 2);
+        }
+
+        for (const col of columnsToAnalyze) {
+          try {
+            // ARREGLO: Construir URL correctamente
+            const columnStatsUrl = tableParam
+              ? `/api/dashboard/column-stats/${encodeURIComponent(col.name)}${tableParam}`
+              : `/api/dashboard/column-stats/${encodeURIComponent(col.name)}`;
+            const statRes = await api.get(columnStatsUrl);
+            stats[col.name] = statRes.data;
+          } catch (err) {
+            console.warn(`No se pudieron cargar stats para ${col.name}`);
+          }
+        }
+        console.log("Estadísticas de columnas cargadas:", stats);
+        setColumnStats(stats);
       }
 
     } catch (err) {
@@ -101,34 +157,37 @@ function Dashboard() {
     );
   }
 
+  // Detectar si los datos son limpios o no
+  const isCleanData = schema?.table_name?.endsWith('_clean') || false;
+  const tableDisplayName = schema?.table_name || "N/A";
+
+  // Stats dinámicos basados en el esquema
   const stats = [
     {
-      title: "Total Casos",
+      title: "Total Registros",
       value: metrics?.total_cases?.toLocaleString() || "0",
-      change: "-12%",
-      icon: Users,
+      icon: Database,
       color: "bg-blue-500",
     },
     {
-      title: "Casos Activos",
-      value: metrics?.active_cases?.toLocaleString() || "0",
-      change: "-8%",
-      icon: Activity,
+      title: "Total Columnas",
+      value: schema?.total_columns || "0",
+      icon: Table,
       color: "bg-espe-green",
     },
     {
-      title: "Recuperados",
-      value: metrics?.recovered?.toLocaleString() || "0",
-      change: "+5%",
-      icon: TrendingUp,
-      color: "bg-green-500",
+      title: "Tabla Activa",
+      value: tableDisplayName.length > 20 ? tableDisplayName.substring(0, 20) + "..." : tableDisplayName,
+      fullValue: tableDisplayName,
+      icon: Activity,
+      color: "bg-purple-500",
+      isTableName: true,
     },
     {
-      title: "Fallecidos",
-      value: metrics?.deaths?.toLocaleString() || "0",
-      change: "-3%",
-      icon: AlertCircle,
-      color: "bg-red-500",
+      title: "Última Actualización",
+      value: metrics?.last_updated ? new Date(metrics.last_updated).toLocaleTimeString() : "N/A",
+      icon: RefreshCw,
+      color: "bg-orange-500",
     },
   ];
 
@@ -137,9 +196,26 @@ function Dashboard() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-espe-dark">
-            Visualización de Datos
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold text-espe-dark">
+              Visualización de Datos
+            </h1>
+            {isCleanData ? (
+              <span className="px-3 py-1 bg-green-100 text-green-800 text-sm font-semibold rounded-full border border-green-300 flex items-center gap-1">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                DATOS LIMPIOS
+              </span>
+            ) : (
+              <span className="px-3 py-1 bg-yellow-100 text-yellow-800 text-sm font-semibold rounded-full border border-yellow-300 flex items-center gap-1">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                DATOS ORIGINALES
+              </span>
+            )}
+          </div>
           <p className="text-gray-600 mt-1">Módulo 5: Visualización de Datos</p>
           <p className="text-xs text-gray-500 mt-1">
             Última actualización: {metrics?.last_updated ? new Date(metrics.last_updated).toLocaleString() : "N/A"}
@@ -154,6 +230,61 @@ function Dashboard() {
         </button>
       </div>
 
+      {/* Selector de Tabla */}
+      <div className="bg-white rounded-xl shadow-md p-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-gray-700">Ver tabla:</span>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedTableType('auto')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                selectedTableType === 'auto'
+                  ? 'bg-espe-green text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              Automático
+            </button>
+            {availableTables.includes('original') && (
+              <button
+                onClick={() => setSelectedTableType('original')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  selectedTableType === 'original'
+                    ? 'bg-yellow-500 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Datos Originales
+              </button>
+            )}
+            {availableTables.includes('clean') && (
+              <button
+                onClick={() => setSelectedTableType('clean')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  selectedTableType === 'clean'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Datos Limpios
+              </button>
+            )}
+            {availableTables.includes('classified') && (
+              <button
+                onClick={() => setSelectedTableType('classified')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  selectedTableType === 'classified'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Datos Clasificados
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {stats.map((stat, index) => {
@@ -162,24 +293,20 @@ function Dashboard() {
             <div
               key={index}
               className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow"
+              title={stat.fullValue || stat.value}
             >
               <div className="flex items-center justify-between">
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="text-gray-600 text-sm">{stat.title}</p>
-                  <h3 className="text-2xl font-bold text-espe-dark mt-1">
-                    {stat.value}
+                  <h3 className={`font-bold text-espe-dark mt-1 ${
+                    stat.isTableName && stat.fullValue && stat.fullValue.length > 20
+                      ? 'text-base break-words'
+                      : 'text-2xl'
+                  }`}>
+                    {stat.fullValue || stat.value}
                   </h3>
-                  <p
-                    className={`text-sm mt-2 ${
-                      stat.change.startsWith("+")
-                        ? "text-green-600"
-                        : "text-red-600"
-                    }`}
-                  >
-                    {stat.change} vs mes anterior
-                  </p>
                 </div>
-                <div className={`${stat.color} p-3 rounded-lg`}>
+                <div className={`${stat.color} p-3 rounded-lg flex-shrink-0 ml-2`}>
                   <Icon size={24} className="text-white" />
                 </div>
               </div>
@@ -188,121 +315,139 @@ function Dashboard() {
         })}
       </div>
 
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Time Series Chart */}
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <h3 className="text-lg font-bold text-espe-dark mb-4">
-            Evolución Temporal (últimos 30 días)
-          </h3>
-          {timeSeries.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={timeSeries}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="casos"
-                  stroke="#2196F3"
-                  strokeWidth={2}
-                  name="Casos"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="muertes"
-                  stroke="#F44336"
-                  strokeWidth={2}
-                  name="Muertes"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="vacunados"
-                  stroke="#4CAF50"
-                  strokeWidth={2}
-                  name="Vacunados"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">
-              No hay datos de series temporales disponibles
+      {/* Gráficas Dinámicas */}
+      {Object.keys(columnStats).length > 0 && (
+        <div className="space-y-4">
+          {/* Indicador de tipo de visualización */}
+          {(selectedTableType === 'classified' || schema?.table_name?.includes('_classified')) && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+              <p className="text-sm text-purple-800 font-semibold">
+                ✨ Mostrando columnas clasificadas automáticamente
+              </p>
             </div>
           )}
-        </div>
 
-        {/* Severity Distribution */}
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <h3 className="text-lg font-bold text-espe-dark mb-4">
-            Distribución por Severidad
-          </h3>
-          {severityData.some(d => d.value > 0) ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={severityData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) =>
-                    percent > 0 ? `${name} ${(percent * 100).toFixed(0)}%` : ''
-                  }
-                  outerRadius={100}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {severityData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">
-              No hay casos clasificados todavía. <br />
-              Ve al módulo de Clasificación para etiquetar casos.
-            </div>
-          )}
-        </div>
-      </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {Object.entries(columnStats).map(([colName, stats], idx) => {
+              // Crear datos para gráfica de barras
+              const chartData = stats.top_values?.slice(0, 10).map(item => ({
+                name: String(item.value).substring(0, 20),
+                value: item.count
+              })) || [];
 
-      {/* Bar Chart */}
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <h3 className="text-lg font-bold text-espe-dark mb-4">
-          Comparativa Mensual
-        </h3>
-        {timeSeries.length > 0 ? (
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={timeSeries}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="casos" fill="#1B5E20" name="Casos" />
-              <Bar dataKey="vacunados" fill="#4CAF50" name="Vacunados" />
-            </BarChart>
-          </ResponsiveContainer>
-        ) : (
-          <div className="h-[300px] flex items-center justify-center text-gray-500">
-            No hay datos disponibles para mostrar
+              const colors = ['#1B5E20', '#2E7D32', '#388E3C', '#43A047', '#4CAF50', '#66BB6A', '#81C784', '#A5D6A7', '#C8E6C9', '#E8F5E9'];
+
+              // Detectar si es columna clasificada
+              const isClassified = colName.includes('_categoria') ||
+                                   colName.includes('_grupo') ||
+                                   colName.includes('_rango') ||
+                                   colName.includes('_anio') ||
+                                   colName.includes('_mes') ||
+                                   colName.includes('_trimestre');
+
+              return (
+                <div key={colName} className="bg-white rounded-xl shadow-md p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <h3 className="text-lg font-bold text-espe-dark">
+                      Distribución: {colName}
+                    </h3>
+                    {isClassified && (
+                      <span className="px-2 py-1 bg-purple-100 text-purple-700 text-xs font-semibold rounded">
+                        Clasificada
+                      </span>
+                    )}
+                  </div>
+                {chartData.length > 0 ? (
+                  <div>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis
+                          dataKey="name"
+                          angle={-45}
+                          textAnchor="end"
+                          height={100}
+                          interval={0}
+                        />
+                        <YAxis />
+                        <Tooltip />
+                        <Bar dataKey="value" fill={colors[idx % colors.length]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="h-[300px] flex items-center justify-center text-gray-500">
+                    No hay datos suficientes para graficar
+                  </div>
+                )}
+              </div>
+            );
+          })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Data Preview Table - SOLO para datos originales */}
+      {selectedTableType === 'original' && (
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h3 className="text-lg font-bold text-espe-dark mb-4">
+            Vista Previa de Datos Originales (primeras 100 filas)
+          </h3>
+          {dataPreview.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {schema?.columns?.slice(0, 10).map((col, idx) => (
+                      <th
+                        key={idx}
+                        className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                      >
+                        {col.name}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {dataPreview.slice(0, 10).map((row, rowIdx) => (
+                    <tr key={rowIdx} className="hover:bg-gray-50">
+                      {schema?.columns?.slice(0, 10).map((col, colIdx) => (
+                        <td
+                          key={colIdx}
+                          className="px-4 py-2 whitespace-nowrap text-sm text-gray-900"
+                        >
+                          {String(row[col.name] || "").substring(0, 50)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {schema?.columns?.length > 10 && (
+                <p className="text-sm text-gray-500 mt-3 text-center">
+                  Mostrando las primeras 10 columnas de {schema.columns.length} totales
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="text-gray-500 text-center py-8">
+              No hay datos para mostrar
+            </div>
+          )}
+        </div>
+      )}
+
 
       {/* Info */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <div className="flex gap-3">
           <AlertCircle className="text-blue-600 flex-shrink-0" size={20} />
           <div>
-            <h4 className="font-semibold text-blue-900">Estado del Sistema</h4>
+            <h4 className="font-semibold text-blue-900">Sistema Dinámico</h4>
             <p className="text-sm text-blue-800 mt-1">
-              {metrics?.total_cases > 0 
-                ? `Hay ${metrics.total_cases} casos en el sistema. Datos actualizados desde Databricks.`
-                : "No hay datos cargados todavía. Usa el módulo de Carga de Datos para subir un archivo CSV."
+              {metrics?.total_cases > 0
+                ? `Hay ${metrics.total_cases.toLocaleString()} registros en la tabla "${schema?.table_name || 'N/A'}". El dashboard se adapta automáticamente a cualquier estructura de datos.`
+                : "No hay datos cargados todavía. Usa el módulo de Carga de Datos para subir un archivo CSV, Excel o JSON."
               }
             </p>
           </div>

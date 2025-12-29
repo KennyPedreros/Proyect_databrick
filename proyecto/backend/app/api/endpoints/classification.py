@@ -1,209 +1,273 @@
-from app.services.monitoring_service import monitoring_service, LogLevel
 from fastapi import APIRouter, HTTPException
-from app.models.schemas import ClassificationResult, ModelMetrics
 from app.services.databricks_service import databricks_service
+from pydantic import BaseModel
+from typing import List, Optional
 import logging
-import uuid
 from datetime import datetime
 
 router = APIRouter(prefix="/api/classify", tags=["Módulo 4: Clasificación"])
 logger = logging.getLogger(__name__)
 
 
-def classify_case_with_rules(age: int, symptoms: str) -> dict:
-    """
-    Clasificación usando Databricks SQL + Reglas de negocio
-    (Sin necesidad de OpenAI - Todo en Databricks)
-    """
-    symptoms_lower = str(symptoms).lower()
-    
-    # Reglas de clasificación
-    critical_keywords = ["ventilador", "uci", "oxígeno bajo", "saturación baja"]
-    severe_keywords = ["neumonía", "hospitalización", "fiebre alta persistente"]
-    moderate_keywords = ["fiebre", "tos persistente", "fatiga severa"]
-    
-    # Lógica de clasificación
-    if any(k in symptoms_lower for k in critical_keywords) or age > 75:
-        return {"severity": "Crítico", "confidence": 0.9}
-    elif any(k in symptoms_lower for k in severe_keywords) or age > 65:
-        return {"severity": "Grave", "confidence": 0.85}
-    elif any(k in symptoms_lower for k in moderate_keywords) or age > 50:
-        return {"severity": "Moderado", "confidence": 0.8}
-    else:
-        return {"severity": "Leve", "confidence": 0.75}
+class AnalyzeRequest(BaseModel):
+    table_name: Optional[str] = None  # Si no se provee, usa tabla más reciente
 
 
-@router.post("/auto-label", response_model=ClassificationResult)
-async def classify_cases():
+class ClassificationConfig(BaseModel):
+    column: str
+    new_column: str
+    type: str  # "numeric_ranges", "year", "month", "quarter", "direct"
+    ranges: Optional[List[dict]] = None  # Solo para numeric_ranges
+
+
+class ExecuteClassificationRequest(BaseModel):
+    table_name: str
+    classifications: List[ClassificationConfig]
+
+
+@router.post("/analyze")
+async def analyze_for_classification(request: AnalyzeRequest):
     """
-    Módulo 4: Clasificación automática usando Databricks
-    
-    Clasifica casos en la base de datos según:
-    - Edad
-    - Síntomas reportados
-    - Condiciones médicas
-    
-    Categorías: Leve, Moderado, Grave, Crítico
+    Analiza una tabla y sugiere clasificaciones automáticas
     """
     try:
-        logger.info("🚀 Iniciando clasificación automática...")
-        
-        if not databricks_service.connect():
-            raise HTTPException(status_code=500, detail="Error conectando a Databricks")
-        
-        # 1. Obtener casos sin clasificar
-        query_select = f"""
-        SELECT case_id, age, symptoms
-        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
-        WHERE severity IS NULL OR severity = ''
-        LIMIT 1000
-        """
-        
-        cases = databricks_service.execute_query(query_select)
-        
-        if not cases:
-            databricks_service.disconnect()
-            return ClassificationResult(
-                classification_id=str(uuid.uuid4()),
-                total_classified=0,
-                distribution={},
-                samples=[]
+        if not databricks_service.is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Databricks no está configurado"
             )
-        
-        # 2. Clasificar cada caso
-        distribution = {"Leve": 0, "Moderado": 0, "Grave": 0, "Crítico": 0}
-        samples = []
-        
-        for case in cases[:1000]:  # Procesar en lotes
-            result = classify_case_with_rules(
-                age=case.get("age", 0),
-                symptoms=case.get("symptoms", "")
+
+        # Obtener tabla a analizar
+        if request.table_name:
+            table_name = request.table_name
+        else:
+            # Usar tabla más reciente (limpia si existe, sino original)
+            if not databricks_service.connect():
+                raise HTTPException(
+                    status_code=500,
+                    detail="Error conectando a Databricks"
+                )
+
+            most_recent = databricks_service.get_most_recent_table()
+            if not most_recent:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No hay tablas disponibles para clasificar"
+                )
+
+            # ARREGLO: Priorizar tabla limpia, pero NUNCA una tabla _classified
+            if databricks_service.table_already_cleaned(most_recent):
+                table_name = f"{most_recent}_clean"
+            else:
+                table_name = most_recent
+
+            # Si la tabla ya tiene _classified, usar la versión sin clasificar
+            if table_name.endswith('_classified'):
+                table_name = table_name.replace('_classified', '')
+
+        logger.info(f"🔍 Analizando tabla para clasificación: {table_name}")
+
+        # Obtener esquema
+        schema = databricks_service.get_table_schema(table_name)
+        if not schema:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No se pudo obtener esquema de la tabla {table_name}"
             )
-            
-            severity = result["severity"]
-            confidence = result["confidence"]
-            
-            # Actualizar en Databricks
-            query_update = f"""
-            UPDATE {databricks_service.catalog}.{databricks_service.schema}.covid_processed
-            SET severity = '{severity}',
-                classification_confidence = {confidence}
-            WHERE case_id = '{case["case_id"]}'
-            """
-            
-            databricks_service.execute_query(query_update)
-            
-            # Estadísticas
-            distribution[severity] += 1
-            
-            # Guardar muestras
-            if len(samples) < 5:
-                samples.append({
-                    "text": case.get("symptoms", ""),
-                    "age": case.get("age"),
-                    "symptoms": case.get("symptoms"),
-                    "predicted_severity": severity,
-                    "confidence": confidence
+
+        # Analizar cada columna
+        classifiable_columns = []
+        non_classifiable_columns = []
+
+        # ARREGLO: schema es un dict con key 'columns', no una lista directa
+        columns_list = schema.get('columns', []) if isinstance(schema, dict) else schema
+
+        for col in columns_list:
+            col_name = col['name']
+            col_type = col['type']
+
+            # Saltar columnas de metadatos
+            if col_name.startswith('_') or col_name in ['ingestion_id', 'created_at']:
+                continue
+
+            analysis = databricks_service.analyze_column_for_classification(
+                table_name=table_name,
+                column_name=col_name,
+                column_type=col_type
+            )
+
+            if analysis and analysis['is_classifiable']:
+                classifiable_columns.append(analysis)
+            else:
+                non_classifiable_columns.append({
+                    "column_name": col_name,
+                    "column_type": col_type,
+                    "reason": "No clasificable (texto libre o ID único)"
                 })
-        
-        databricks_service.disconnect()
-        
-        logger.info(f"✅ Clasificados {len(cases)} casos")
-        
-        monitoring_service.log_event(
-            process="Clasificación",
-            level=LogLevel.SUCCESS,
-            message=f"Clasificados {len(cases)} casos",
-            data={
-                "total_classified": len(cases),
-                "distribution": distribution
+
+        logger.info(f"✅ Análisis completado: {len(classifiable_columns)} columnas clasificables encontradas")
+
+        total_cols = len(columns_list)
+
+        return {
+            "table_name": table_name,
+            "total_columns": total_cols,
+            "classifiable_columns": classifiable_columns,
+            "non_classifiable_columns": non_classifiable_columns,
+            "total_classifiable": len(classifiable_columns)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en análisis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/execute")
+async def execute_classification(request: ExecuteClassificationRequest):
+    """
+    Ejecuta clasificaciones seleccionadas y crea tabla _classified
+    """
+    try:
+        if not databricks_service.is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Databricks no está configurado"
+            )
+
+        if not request.classifications or len(request.classifications) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Debes seleccionar al menos una clasificación"
+            )
+
+        logger.info(f"🚀 Ejecutando {len(request.classifications)} clasificaciones en {request.table_name}")
+
+        # Verificar si ya existe tabla classified
+        classified_table = f"{request.table_name}_classified"
+        if databricks_service.connect():
+            check_query = f"SHOW TABLES IN {databricks_service.catalog}.{databricks_service.schema} LIKE '{classified_table}'"
+            existing = databricks_service.execute_query(check_query)
+            if existing and len(existing) > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"La tabla '{classified_table}' ya existe. Elimínala primero si deseas reclasificar."
+                )
+
+        start_time = datetime.now()
+
+        # Convertir request a formato esperado por el servicio
+        classifications_data = []
+        for c in request.classifications:
+            class_dict = {
+                "column": c.column,
+                "new_column": c.new_column,
+                "type": c.type
             }
-)
+            if c.ranges:
+                class_dict["ranges"] = c.ranges
+            classifications_data.append(class_dict)
 
-        return ClassificationResult(
-            classification_id=str(uuid.uuid4()),
-            total_classified=len(cases),
-            distribution=distribution,
-            samples=samples
+        # Ejecutar clasificación
+        result = databricks_service.execute_classification(
+            source_table=request.table_name,
+            classifications=classifications_data
         )
-        
-    except Exception as e:
-        logger.error(f"❌ Error en clasificación: {str(e)}")
-        databricks_service.disconnect()
-        raise HTTPException(status_code=500, detail=str(e))
 
+        elapsed_seconds = (datetime.now() - start_time).total_seconds()
 
-@router.get("/metrics", response_model=ModelMetrics)
-async def get_classification_metrics():
-    """Métricas del modelo de clasificación"""
-    try:
-        # Métricas simuladas (en producción vendrían de un proceso real)
-        return ModelMetrics(
-            accuracy=0.87,
-            precision=0.85,
-            recall=0.84,
-            f1_score=0.845
+        # Registrar en audit_logs
+        databricks_service.insert_audit_log(
+            process="Clasificación_ML",
+            level="SUCCESS",
+            message=f"Clasificación completada: {request.table_name} → {classified_table}",
+            metadata={
+                "source_table": request.table_name,
+                "classified_table": classified_table,
+                "total_records": result['total_records'],
+                "classifications_applied": result['classifications_applied'],
+                "elapsed_seconds": elapsed_seconds
+            }
         )
+
+        logger.info(f"✅ Clasificación completada en {elapsed_seconds:.2f}s")
+
+        return {
+            "success": True,
+            "message": "Clasificación ejecutada exitosamente",
+            "source_table": request.table_name,
+            "classified_table": classified_table,
+            "total_records": result['total_records'],
+            "classifications_applied": result['classifications_applied'],
+            "elapsed_seconds": elapsed_seconds
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Error ejecutando clasificación: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/distribution")
-async def get_severity_distribution():
-    """Distribución de casos por severidad"""
+@router.get("/classification-history")
+async def get_classification_history(limit: int = 10):
+    """
+    Obtiene el historial de clasificaciones desde audit_logs
+    """
     try:
-        if not databricks_service.connect():
-            raise HTTPException(status_code=500, detail="Error conectando a Databricks")
-        
-        query = f"""
-        SELECT severity, COUNT(*) as count
-        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
-        WHERE severity IS NOT NULL
-        GROUP BY severity
-        """
-        
-        results = databricks_service.execute_query(query)
-        databricks_service.disconnect()
-        
-        distribution = {}
-        total = 0
-        for row in results:
-            distribution[row["severity"]] = row["count"]
-            total += row["count"]
-        
-        return {
-            "distribution": distribution,
-            "total": total
-        }
-        
-    except Exception as e:
-        databricks_service.disconnect()
-        raise HTTPException(status_code=500, detail=str(e))
+        if not databricks_service.is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Databricks no está configurado"
+            )
 
-
-@router.get("/samples")
-async def get_classified_samples(limit: int = 10):
-    """Ejemplos de casos clasificados"""
-    try:
         if not databricks_service.connect():
-            raise HTTPException(status_code=500, detail="Error conectando a Databricks")
-        
+            raise HTTPException(
+                status_code=500,
+                detail="Error conectando a Databricks"
+            )
+
+        # Obtener logs de clasificación
         query = f"""
-        SELECT case_id, age, symptoms, severity, classification_confidence
-        FROM {databricks_service.catalog}.{databricks_service.schema}.covid_processed
-        WHERE severity IS NOT NULL
-        ORDER BY case_id DESC
-        LIMIT {limit}
+            SELECT
+                timestamp,
+                level,
+                message,
+                metadata
+            FROM {databricks_service.catalog}.{databricks_service.schema}.audit_logs
+            WHERE process = 'Clasificación_ML'
+            ORDER BY timestamp DESC
+            LIMIT {limit}
         """
-        
-        samples = databricks_service.execute_query(query)
+
+        logs = databricks_service.execute_query(query)
         databricks_service.disconnect()
-        
-        return {
-            "samples": samples,
-            "total": len(samples)
-        }
-        
+
+        if not logs:
+            return {"history": []}
+
+        # Formatear logs
+        history = []
+        for log in logs:
+            import json
+            metadata = json.loads(log['metadata']) if isinstance(log['metadata'], str) else log['metadata']
+
+            history.append({
+                "timestamp": log['timestamp'].isoformat() if hasattr(log['timestamp'], 'isoformat') else str(log['timestamp']),
+                "level": log['level'],
+                "message": log['message'],
+                "source_table": metadata.get('source_table', 'N/A'),
+                "classified_table": metadata.get('classified_table', 'N/A'),
+                "total_records": metadata.get('total_records', 0),
+                "classifications_applied": metadata.get('classifications_applied', 0),
+                "elapsed_seconds": metadata.get('elapsed_seconds', 0)
+            })
+
+        return {"history": history}
+
+    except HTTPException:
+        raise
     except Exception as e:
-        databricks_service.disconnect()
+        logger.error(f"Error obteniendo historial: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

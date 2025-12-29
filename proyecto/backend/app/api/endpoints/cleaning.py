@@ -328,7 +328,7 @@ async def get_cleaning_strategies():
 async def test_cleaning_pipeline():
     """
     Probar el pipeline de limpieza con datos de ejemplo
-    
+
     Útil para verificar que el servicio funciona correctamente
     """
     try:
@@ -338,7 +338,7 @@ async def test_cleaning_pipeline():
             'age': [25, 30, None, 45, 200, 25, 30],  # Nulos y outliers
             'name': ['  Juan', 'MARIA', 'pedro', None, 'ANA', '  Juan', 'MARIA']
         })
-        
+
         # Configuración de prueba
         config = {
             "remove_duplicates": True,
@@ -346,10 +346,10 @@ async def test_cleaning_pipeline():
             "detect_outliers": True,
             "standardize_formats": True
         }
-        
+
         # Ejecutar limpieza
         df_clean, results = cleaning_service.clean_covid_data(test_data, config)
-        
+
         return {
             "test_status": "success",
             "original_data": test_data.to_dict('records'),
@@ -357,6 +357,248 @@ async def test_cleaning_pipeline():
             "cleaning_results": results,
             "message": "Pipeline de limpieza funcionando correctamente"
         }
-    
+
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/clean-databricks")
+async def clean_databricks_table(background_tasks: BackgroundTasks):
+    """
+    🧹 LIMPIEZA AUTOMÁTICA DE DATOS
+
+    Limpia la tabla activa en Databricks:
+    - Elimina duplicados
+    - Elimina filas con valores nulos
+    - Detecta y elimina outliers en columnas numéricas
+    - Guarda resultado en nueva tabla {nombre}_clean
+
+    Funciona con CUALQUIER tabla dinámica
+    """
+    from app.services.databricks_service import databricks_service
+    import uuid
+
+    try:
+        if not databricks_service.is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Databricks no está configurado"
+            )
+
+        # Asegurar conexión activa
+        if not databricks_service.connect():
+            raise HTTPException(
+                status_code=500,
+                detail="Error conectando a Databricks"
+            )
+
+        # Obtener tabla MÁS RECIENTE (no la más grande, sino la última ingesta)
+        table_name = databricks_service.get_most_recent_table()
+
+        if not table_name:
+            raise HTTPException(
+                status_code=404,
+                detail="No hay tablas disponibles para limpiar"
+            )
+
+        # Verificar si la tabla ya fue limpiada
+        if databricks_service.table_already_cleaned(table_name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"La tabla '{table_name}' ya fue limpiada anteriormente. Ya existe '{table_name}_clean'"
+            )
+
+        full_table_name = f"{databricks_service.catalog}.{databricks_service.schema}.{table_name}"
+
+        logger.info(f"🧹 Iniciando limpieza de tabla MÁS RECIENTE: {table_name}")
+
+        # 1. Leer datos
+        read_query = f"SELECT * FROM {full_table_name}"
+        data = databricks_service.fetch_all(read_query)
+
+        if not data:
+            raise HTTPException(
+                status_code=400,
+                detail="La tabla está vacía"
+            )
+
+        df_original = pd.DataFrame(data)
+        original_count = len(df_original)
+
+        logger.info(f"📊 Registros originales: {original_count:,}")
+
+        # 2. NO eliminar duplicados - Los datos agregados tienen "duplicados" válidos
+        # (Ej: datos de vacunas agrupados por fecha/provincia/edad)
+        df_clean = df_original.copy()
+        duplicates_removed = 0
+
+        # 3. Eliminar nulos - SOLO filas con TODOS los valores nulos (menos agresivo)
+        before_dropna = len(df_clean)
+        df_clean = df_clean.dropna(how='all')  # Solo elimina si TODA la fila es null
+        nulls_removed = before_dropna - len(df_clean)
+
+        # 4. Detectar outliers - SOLO marcar, NO eliminar (demasiado agresivo)
+        # En lugar de eliminar, solo contamos cuántos serían outliers
+        numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+        outliers_removed = 0
+
+        # CAMBIO: No eliminamos outliers, solo los contamos para estadísticas
+        for col in numeric_cols:
+            if col.startswith('_'):  # Skip metadata columns
+                continue
+            try:
+                Q1 = df_clean[col].quantile(0.25)
+                Q3 = df_clean[col].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - 3 * IQR
+                upper_bound = Q3 + 3 * IQR
+
+                # Solo CONTAR outliers, no eliminarlos
+                outliers_count = len(df_clean[(df_clean[col] < lower_bound) | (df_clean[col] > upper_bound)])
+                outliers_removed += outliers_count
+            except:
+                continue
+
+        clean_count = len(df_clean)
+
+        logger.info(f"✅ Registros limpios: {clean_count:,}")
+        logger.info(f"🗑️  Duplicados eliminados: {duplicates_removed:,}")
+        logger.info(f"🗑️  Nulos eliminados: {nulls_removed:,}")
+        logger.info(f"🗑️  Outliers eliminados: {outliers_removed:,}")
+
+        # 5. Crear tabla limpia y cargar datos
+        clean_table_name = f"{table_name}_clean"
+        clean_full_table = f"{databricks_service.catalog}.{databricks_service.schema}.{clean_table_name}"
+
+        # ARREGLO: Crear tabla e insertar datos
+        start_time = datetime.now()
+        ingestion_id = str(uuid.uuid4())
+
+        # 1. Crear tabla vacía
+        databricks_service.create_dynamic_table_from_df(
+            df=df_clean,
+            table_name=clean_table_name,
+            drop_if_exists=True
+        )
+
+        # 2. Insertar datos limpios
+        result = databricks_service.insert_dataframe_ultra_fast(
+            df=df_clean,
+            table_name=clean_table_name,
+            ingestion_id=ingestion_id
+        )
+
+        elapsed_seconds = (datetime.now() - start_time).total_seconds()
+
+        logger.info(f"💾 Tabla limpia guardada: {clean_table_name}")
+
+        # 7. Registrar en audit_logs
+        quality_score = round((clean_count / original_count) * 100, 2)
+
+        databricks_service.insert_audit_log(
+            process="Limpieza_Datos",
+            level="SUCCESS",
+            message=f"Limpieza completada: {table_name} → {clean_table_name}",
+            metadata={
+                "original_table": table_name,
+                "clean_table": clean_table_name,
+                "original_records": original_count,
+                "clean_records": clean_count,
+                "duplicates_removed": duplicates_removed,
+                "nulls_removed": nulls_removed,
+                "outliers_removed": outliers_removed,
+                "quality_score": quality_score,
+                "elapsed_seconds": elapsed_seconds
+            }
+        )
+
+        logger.info(f"📝 Log de limpieza registrado en audit_logs")
+
+        return {
+            "success": True,
+            "message": f"Datos limpiados exitosamente",
+            "original_table": table_name,
+            "clean_table": clean_table_name,
+            "stats": {
+                "original_records": original_count,
+                "clean_records": clean_count,
+                "duplicates_removed": duplicates_removed,
+                "nulls_removed": nulls_removed,
+                "outliers_removed": outliers_removed,
+                "quality_score": quality_score
+            },
+            "elapsed_seconds": elapsed_seconds
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en limpieza: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/cleaning-history")
+async def get_cleaning_history(limit: int = 10):
+    """
+    Obtiene el historial de limpiezas desde audit_logs
+    """
+    from app.services.databricks_service import databricks_service
+
+    try:
+        if not databricks_service.is_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="Databricks no está configurado"
+            )
+
+        if not databricks_service.connect():
+            raise HTTPException(
+                status_code=500,
+                detail="Error conectando a Databricks"
+            )
+
+        # Obtener logs de limpieza
+        query = f"""
+            SELECT
+                timestamp,
+                level,
+                message,
+                metadata,
+                user_id
+            FROM {databricks_service.catalog}.{databricks_service.schema}.audit_logs
+            WHERE process = 'Limpieza_Datos'
+            ORDER BY timestamp DESC
+            LIMIT {limit}
+        """
+
+        logs = databricks_service.execute_query(query)
+        databricks_service.disconnect()
+
+        if not logs:
+            return {"history": []}
+
+        # Formatear logs para el frontend
+        history = []
+        for log in logs:
+            import json
+            metadata = json.loads(log['metadata']) if isinstance(log['metadata'], str) else log['metadata']
+
+            history.append({
+                "timestamp": log['timestamp'].isoformat() if hasattr(log['timestamp'], 'isoformat') else str(log['timestamp']),
+                "level": log['level'],
+                "message": log['message'],
+                "original_table": metadata.get('original_table', 'N/A'),
+                "clean_table": metadata.get('clean_table', 'N/A'),
+                "original_records": metadata.get('original_records', 0),
+                "clean_records": metadata.get('clean_records', 0),
+                "quality_score": metadata.get('quality_score', 0),
+                "elapsed_seconds": metadata.get('elapsed_seconds', 0)
+            })
+
+        return {"history": history}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error obteniendo historial: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

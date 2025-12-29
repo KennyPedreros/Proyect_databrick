@@ -176,15 +176,7 @@ def read_file_universal(file_content: bytes, filename: str) -> Tuple[pd.DataFram
 
 @router.post("/upload", response_model=IngestionResponse)
 async def upload_covid_data(file: UploadFile = File(...)):
-    """
-    🚀 INGESTA ULTRA-RÁPIDA con COPY INTO
-    
-    ✅ 200,000 registros en ~30 segundos
-    ✅ Soporta: CSV, Excel, JSON
-    ✅ Detecta encoding automáticamente
-    ✅ Usa Spark en paralelo para máxima velocidad
-    
-    Proceso:
+    """ Proceso:
     1. Lee y procesa el archivo
     2. Crea tabla dinámica según columnas
     3. Sube CSV a Databricks Volume/DBFS
@@ -198,12 +190,9 @@ async def upload_covid_data(file: UploadFile = File(...)):
         logger.info(f"🚀 INICIANDO INGESTA ULTRA-RÁPIDA")
         logger.info(f"📥 Archivo: {file.filename}")
         
-        # Leer archivo
-        contents = bytearray()
-        chunk_size = 1024 * 1024
-        
-        while chunk := await file.read(chunk_size):
-            contents.extend(chunk)
+        # Leer archivo de forma más eficiente
+        # Para archivos grandes, usar streaming
+        contents = await file.read()
         
         file_size = len(contents)
         logger.info(f"📊 Tamaño: {file_size / 1024 / 1024:.2f} MB")
@@ -238,11 +227,12 @@ async def upload_covid_data(file: UploadFile = File(...)):
             # 1. Setup inicial
             databricks_service.setup_database()
             
-            # 2. Crear tabla dinámica
+            # 2. Crear tabla dinámica (siempre recrea para evitar conflictos de esquema)
+            # Para desarrollo: siempre DROP para asegurar esquema limpio
             table_name = databricks_service.create_dynamic_table_from_df(
                 df=df,
                 table_name=file.filename,
-                drop_if_exists=False
+                drop_if_exists=True  # Siempre recrear para evitar conflictos Delta
             )
             
             logger.info(f"✅ Tabla '{table_name}' creada")

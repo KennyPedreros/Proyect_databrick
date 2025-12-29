@@ -1,267 +1,330 @@
-import React, { useState } from "react";
-import { Play, Trash2, Filter, CheckCircle, AlertCircle } from "lucide-react";
-import { runCleaningJob, getCleaningStatus } from "../services/cleaningAPI";
+import React, { useState, useEffect } from "react";
+import { Sparkles, CheckCircle, AlertCircle, TrendingUp, XCircle, Clock, History } from "lucide-react";
+import api from "../services/api";
 
 function DataCleaner() {
-  const [jobId, setJobId] = useState(null);
-  const [status, setStatus] = useState(null);
-  const [running, setRunning] = useState(false);
-  const [config, setConfig] = useState({
-    removeDuplicates: true,
-    handleMissing: "drop",
-    detectOutliers: true,
-    standardizeFormats: true,
-  });
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
-  const handleStartCleaning = async () => {
-    setRunning(true);
+  // Cargar historial al montar el componente
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const fetchHistory = async () => {
+    setLoadingHistory(true);
     try {
-      // Convertir config a snake_case para el backend
-      const backendConfig = {
-        remove_duplicates: config.removeDuplicates,
-        handle_missing: config.handleMissing,
-        detect_outliers: config.detectOutliers,
-        standardize_formats: config.standardizeFormats,
-      };
-      const response = await runCleaningJob(backendConfig);
-      setJobId(response.job_id);
-      pollJobStatus(response.job_id);
-    } catch (error) {
-      console.error("Error starting cleaning:", error);
-      setRunning(false);
+      const response = await api.get("/api/clean/cleaning-history?limit=5");
+      setHistory(response.data.history || []);
+    } catch (err) {
+      console.error("Error cargando historial:", err);
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
-  const pollJobStatus = async (id) => {
-    const interval = setInterval(async () => {
-      try {
-        const statusResponse = await getCleaningStatus(id);
-        setStatus(statusResponse);
+  const handleCleanData = async () => {
+    setLoading(true);
+    setResult(null);
+    setError(null);
 
-        if (
-          statusResponse.status === "completed" ||
-          statusResponse.status === "failed"
-        ) {
-          clearInterval(interval);
-          setRunning(false);
-        }
-      } catch (error) {
-        clearInterval(interval);
-        setRunning(false);
-      }
-    }, 2000);
+    try {
+      const response = await api.post("/api/clean/clean-databricks");
+      setResult(response.data);
+      // Recargar historial después de limpieza exitosa
+      await fetchHistory();
+    } catch (err) {
+      console.error("Error limpiando datos:", err);
+      setError(err.response?.data?.detail || err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6 fade-in">
+    <div className="max-w-4xl mx-auto space-y-6 fade-in">
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold text-espe-dark">Limpieza de Datos</h1>
-        <p className="text-gray-600 mt-1">Módulo 3: Procesamiento y Limpieza</p>
+        <p className="text-gray-600 mt-1">Módulo 2: Procesamiento y Limpieza</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Configuration Panel */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-espe-dark mb-4 flex items-center gap-2">
-              <Filter size={20} className="text-espe-green" />
-              Configuración
-            </h3>
-
-            <div className="space-y-4">
-              <label className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={config.removeDuplicates}
-                  onChange={(e) =>
-                    setConfig({ ...config, removeDuplicates: e.target.checked })
-                  }
-                  className="w-5 h-5 text-espe-green rounded focus:ring-espe-green"
-                />
-                <span className="text-sm">Eliminar duplicados</span>
-              </label>
-
-              <label className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={config.detectOutliers}
-                  onChange={(e) =>
-                    setConfig({ ...config, detectOutliers: e.target.checked })
-                  }
-                  className="w-5 h-5 text-espe-green rounded focus:ring-espe-green"
-                />
-                <span className="text-sm">Detectar outliers</span>
-              </label>
-
-              <label className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={config.standardizeFormats}
-                  onChange={(e) =>
-                    setConfig({
-                      ...config,
-                      standardizeFormats: e.target.checked,
-                    })
-                  }
-                  className="w-5 h-5 text-espe-green rounded focus:ring-espe-green"
-                />
-                <span className="text-sm">Estandarizar formatos</span>
-              </label>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Manejo de valores nulos
-                </label>
-                <select
-                  value={config.handleMissing}
-                  onChange={(e) =>
-                    setConfig({ ...config, handleMissing: e.target.value })
-                  }
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-espe-green focus:border-transparent"
-                >
-                  <option value="drop">Eliminar filas</option>
-                  <option value="fill_mean">Rellenar con media</option>
-                  <option value="fill_median">Rellenar con mediana</option>
-                  <option value="fill_zero">Rellenar con cero</option>
-                </select>
-              </div>
-            </div>
-
-            <button
-              onClick={handleStartCleaning}
-              disabled={running}
-              className="w-full mt-6 bg-espe-green text-white px-4 py-3 rounded-lg hover:bg-espe-green-light transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <Play size={20} />
-              {running ? "Procesando..." : "Iniciar Limpieza"}
-            </button>
+      {/* Main Card */}
+      <div className="bg-white rounded-xl shadow-md p-8">
+        <div className="text-center">
+          <div className="inline-flex items-center justify-center w-20 h-20 bg-espe-green/10 rounded-full mb-4">
+            <Sparkles size={40} className="text-espe-green" />
           </div>
+
+          <h2 className="text-2xl font-bold text-espe-dark mb-2">
+            Limpieza Automática
+          </h2>
+
+          <p className="text-gray-600 mb-6 max-w-2xl mx-auto">
+            Este proceso automático limpiará tu <strong>tabla más reciente</strong> eliminando duplicados,
+            valores nulos y outliers. Los datos limpios se guardarán en una nueva tabla con sufijo "_clean".
+          </p>
+
+          <button
+            onClick={handleCleanData}
+            disabled={loading}
+            className="bg-espe-green text-white px-8 py-4 rounded-lg hover:bg-espe-green-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold shadow-lg"
+          >
+            {loading ? (
+              <div className="flex items-center gap-3">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                <span>Limpiando datos...</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Sparkles size={20} />
+                <span>Limpiar Datos</span>
+              </div>
+            )}
+          </button>
         </div>
 
-        {/* Results Panel */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Status Card */}
-          {status && (
-            <div className="bg-white rounded-xl shadow-md p-6">
-              <h3 className="text-lg font-bold text-espe-dark mb-4">
-                Estado del Proceso
-              </h3>
-
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-600">Job ID:</span>
-                  <span className="font-mono text-sm">{jobId}</span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-600">Estado:</span>
-                  <span
-                    className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                      status.status === "completed"
-                        ? "bg-green-100 text-green-800"
-                        : status.status === "running"
-                        ? "bg-blue-100 text-blue-800"
-                        : status.status === "failed"
-                        ? "bg-red-100 text-red-800"
-                        : "bg-gray-100 text-gray-800"
-                    }`}
-                  >
-                    {status.status}
-                  </span>
-                </div>
-
-                {status.progress && (
-                  <div>
-                    <div className="flex justify-between text-sm mb-1">
-                      <span className="text-gray-600">Progreso</span>
-                      <span className="font-semibold">{status.progress}%</span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div
-                        className="bg-espe-green h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${status.progress}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                )}
-              </div>
+        {/* What it does */}
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-blue-50 p-4 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <CheckCircle className="text-blue-600" size={20} />
+              <h4 className="font-semibold text-blue-900">Elimina Duplicados</h4>
             </div>
-          )}
+            <p className="text-sm text-blue-800">
+              Identifica y elimina filas duplicadas para asegurar unicidad
+            </p>
+          </div>
 
-          {/* Results */}
-          {status?.results && (
-            <div className="bg-white rounded-xl shadow-md p-6">
-              <h3 className="text-lg font-bold text-espe-dark mb-4">
-                Resultados
-              </h3>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-blue-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Registros originales</p>
-                  <p className="text-2xl font-bold text-espe-dark mt-1">
-                    {status.results.original_records?.toLocaleString()}
-                  </p>
-                </div>
-
-                <div className="bg-green-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Registros limpios</p>
-                  <p className="text-2xl font-bold text-espe-dark mt-1">
-                    {status.results.clean_records?.toLocaleString()}
-                  </p>
-                </div>
-
-                <div className="bg-red-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Duplicados eliminados</p>
-                  <p className="text-2xl font-bold text-espe-dark mt-1">
-                    {status.results.duplicates_removed?.toLocaleString()}
-                  </p>
-                </div>
-
-                <div className="bg-yellow-50 p-4 rounded-lg">
-                  <p className="text-sm text-gray-600">Outliers detectados</p>
-                  <p className="text-2xl font-bold text-espe-dark mt-1">
-                    {status.results.outliers_detected?.toLocaleString()}
-                  </p>
-                </div>
-              </div>
-
-              {status.results.issues && (
-                <div className="mt-6">
-                  <h4 className="font-semibold mb-3">Problemas detectados:</h4>
-                  <ul className="space-y-2">
-                    {status.results.issues.map((issue, idx) => (
-                      <li key={idx} className="flex items-start gap-2">
-                        <AlertCircle
-                          size={16}
-                          className="text-yellow-600 flex-shrink-0 mt-1"
-                        />
-                        <span className="text-sm text-gray-700">{issue}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+          <div className="bg-green-50 p-4 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <XCircle className="text-green-600" size={20} />
+              <h4 className="font-semibold text-green-900">Elimina Nulos</h4>
             </div>
-          )}
+            <p className="text-sm text-green-800">
+              Remueve filas con valores faltantes o nulos
+            </p>
+          </div>
 
-          {/* Info */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <div className="flex gap-3">
-              <AlertCircle className="text-blue-600 flex-shrink-0" size={20} />
+          <div className="bg-purple-50 p-4 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="text-purple-600" size={20} />
+              <h4 className="font-semibold text-purple-900">Detecta Outliers</h4>
+            </div>
+            <p className="text-sm text-purple-800">
+              Usa IQR para detectar y eliminar valores extremos
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Results */}
+      {result && (
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <CheckCircle className="text-green-600" size={32} />
+            <div>
+              <h3 className="text-xl font-bold text-espe-dark">
+                ¡Limpieza Completada!
+              </h3>
+              <p className="text-sm text-gray-600">{result.message}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div className="bg-blue-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Originales</p>
+              <p className="text-2xl font-bold text-espe-dark">
+                {result.stats.original_records.toLocaleString()}
+              </p>
+            </div>
+
+            <div className="bg-green-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Limpios</p>
+              <p className="text-2xl font-bold text-green-700">
+                {result.stats.clean_records.toLocaleString()}
+              </p>
+            </div>
+
+            <div className="bg-red-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Duplicados</p>
+              <p className="text-2xl font-bold text-red-700">
+                {result.stats.duplicates_removed.toLocaleString()}
+              </p>
+            </div>
+
+            <div className="bg-yellow-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Nulos</p>
+              <p className="text-2xl font-bold text-yellow-700">
+                {result.stats.nulls_removed.toLocaleString()}
+              </p>
+            </div>
+
+            <div className="bg-purple-50 p-4 rounded-lg text-center">
+              <p className="text-sm text-gray-600 mb-1">Outliers</p>
+              <p className="text-2xl font-bold text-purple-700">
+                {result.stats.outliers_removed.toLocaleString()}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-espe-green/10 border border-espe-green rounded-lg p-4">
+            <div className="flex items-center justify-between">
               <div>
-                <h4 className="font-semibold text-blue-900">
-                  Proceso automatizado
-                </h4>
-                <p className="text-sm text-blue-800 mt-1">
-                  La limpieza se ejecuta en Databricks usando Apache Spark para
-                  procesamiento masivo. Los datos limpios se almacenan en Delta
-                  Lake.
+                <p className="font-semibold text-espe-dark">Tabla Original:</p>
+                <p className="text-sm text-gray-600">{result.original_table}</p>
+              </div>
+              <div>
+                <p className="font-semibold text-espe-dark">Tabla Limpia:</p>
+                <p className="text-sm text-gray-600">{result.clean_table}</p>
+              </div>
+              <div>
+                <p className="font-semibold text-espe-dark">Calidad:</p>
+                <p className="text-2xl font-bold text-espe-green">
+                  {result.stats.quality_score}%
                 </p>
               </div>
             </div>
           </div>
+
+          <p className="text-xs text-gray-500 mt-4 text-center">
+            Tiempo de procesamiento: {result.elapsed_seconds.toFixed(1)} segundos
+          </p>
         </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="text-red-600 flex-shrink-0" size={24} />
+            <div>
+              <h4 className="font-semibold text-red-900">Error en la limpieza</h4>
+              <p className="text-sm text-red-800 mt-1">{error}</p>
+              <button
+                onClick={handleCleanData}
+                className="mt-3 text-sm text-red-600 underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Important Info */}
+      <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 mb-4">
+        <div className="flex gap-3">
+          <AlertCircle className="text-yellow-600 flex-shrink-0" size={20} />
+          <div>
+            <h4 className="font-semibold text-yellow-900">Importante</h4>
+            <ul className="text-sm text-yellow-800 mt-1 space-y-1">
+              <li>• Se limpiará la <strong>tabla más reciente</strong> (última ingesta)</li>
+              <li>• No se puede limpiar la misma tabla dos veces</li>
+              <li>• Si ya existe una tabla "_clean", se mostrará un error</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="flex gap-3">
+          <AlertCircle className="text-blue-600 flex-shrink-0" size={20} />
+          <div>
+            <h4 className="font-semibold text-blue-900">
+              Proceso Automático y Dinámico
+            </h4>
+            <p className="text-sm text-blue-800 mt-1">
+              La limpieza se ejecuta directamente en Databricks y funciona con
+              cualquier estructura de datos. Los datos originales se mantienen
+              intactos en la tabla original.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Historial de Limpiezas */}
+      <div className="bg-white rounded-xl shadow-md p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <History className="text-espe-dark" size={24} />
+            <h3 className="text-xl font-bold text-espe-dark">
+              Historial de Limpiezas
+            </h3>
+          </div>
+          <button
+            onClick={fetchHistory}
+            disabled={loadingHistory}
+            className="text-sm text-espe-green hover:text-espe-green-light transition-colors"
+          >
+            {loadingHistory ? "Cargando..." : "Actualizar"}
+          </button>
+        </div>
+
+        {history.length === 0 ? (
+          <p className="text-gray-500 text-center py-8">
+            No hay limpiezas registradas aún
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {history.map((item, index) => (
+              <div
+                key={index}
+                className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Clock size={16} className="text-gray-500" />
+                      <span className="text-sm text-gray-600">
+                        {new Date(item.timestamp).toLocaleString('es-ES', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    </div>
+                    <p className="font-semibold text-espe-dark mb-1">
+                      {item.original_table} → {item.clean_table}
+                    </p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-xs">
+                      <div className="bg-blue-50 px-2 py-1 rounded">
+                        <span className="text-gray-600">Originales: </span>
+                        <span className="font-semibold text-blue-700">
+                          {item.original_records.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="bg-green-50 px-2 py-1 rounded">
+                        <span className="text-gray-600">Limpios: </span>
+                        <span className="font-semibold text-green-700">
+                          {item.clean_records.toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="bg-purple-50 px-2 py-1 rounded">
+                        <span className="text-gray-600">Calidad: </span>
+                        <span className="font-semibold text-purple-700">
+                          {item.quality_score}%
+                        </span>
+                      </div>
+                      <div className="bg-gray-50 px-2 py-1 rounded">
+                        <span className="text-gray-600">Tiempo: </span>
+                        <span className="font-semibold text-gray-700">
+                          {item.elapsed_seconds.toFixed(1)}s
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

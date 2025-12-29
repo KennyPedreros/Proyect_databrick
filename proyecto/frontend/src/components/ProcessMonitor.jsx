@@ -14,7 +14,19 @@ function ProcessMonitor() {
   const [logs, setLogs] = useState([]);
 
   const [loading, setLoading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  // Leer estado inicial de localStorage (por defecto true)
+  const [autoRefresh, setAutoRefresh] = useState(() => {
+    const saved = localStorage.getItem('monitorAutoRefresh');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const [error, setError] = useState(null);
+
+  // Guardar en localStorage cuando cambie autoRefresh
+  useEffect(() => {
+    localStorage.setItem('monitorAutoRefresh', autoRefresh);
+  }, [autoRefresh]);
 
   useEffect(() => {
     loadData();
