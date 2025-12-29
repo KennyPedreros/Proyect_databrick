@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     
     # CORS Origins (Frontend)
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"]
+    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000","https://proyect-databrick.vercel.app","https://proyect-databrick-git-main-kenny-pedreros-projects.vercel.app","https://proyect-databrick-75ganxylg-kenny-pedreros-projects.vercel.app"]
     
     # Databricks Configuration
     DATABRICKS_HOST: Optional[str] = None
